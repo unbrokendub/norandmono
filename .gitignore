@@ -1,0 +1,34 @@
+# build outputs: everything here is derived from Norand's firmware
+build/
+*.syx
+*.bin
+*.elf
+
+# captures from a unit and local scratch
+capture-*.txt
+*.mmon
+tmp/
+screenshots/
+.claude/
+
+# Python / macOS
+__pycache__/
+*.pyc
+.DS_Store
+
+# not published: the vendor manual, the Russian user guide and its builder,
+# and working notes from the investigations
+docs/norand-mono-manual.pdf
+docs/manual/
+docs/status.md
+docs/led-freeze-audit.md
+docs/p5-midi-audit.md
+docs/p6-capture-audit.md
+docs/p6-spi-midi.md
+docs/ui-unlink-audit.md
+docs/sync-handoff.md
+docs/ui-chords-fix.md
+docs/errata.html
+docs/xenv-exponential.md
+docs/scale-random.md
+docs/scale-random-cutoff.md
