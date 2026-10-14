@@ -132,9 +132,20 @@ The panel went dark or stopped responding while audio kept playing:
 
 - Button chords could leave the UI stuck in a mode (e.g. TYPE+WAVE
   unlink).
+- A pattern rotate (FUNC+UP/DOWN) whose range fell outside the step store
+  ran past it and crashed. That is a rotate of a 0-step pattern, or a
+  reversed range in a project's events. Such a rotate is now ignored. A
+  unit's own projects are not expected to contain either.
 
 ### Storage and project bugs
 
+- A save cut short by a power loss could brick the unit. A partly written
+  project slot hung its load: the journal reader aborted on erased flash,
+  before any of the stock's own checks. Slot 0 loads at every power-on, so
+  the unit hung at every power-on. A slot like that now fails the stock's
+  checks. At power-on the unit then starts with an empty project and leaves
+  slot 0 as it is until you save. A later load of such a slot shows the
+  stock's error code on SEQ 1–8.
 - A paste during a save froze the unit.
 - DELETE+RECORD (clear patch) also wiped a mod note's sound.
 - The morph pattern's unlinked X-Env trigs fired even with the morph knob
@@ -315,7 +326,7 @@ patch/            the injected code
   np_patch.S        header, vectors, fault handlers, watchdog, hooks
   np_lfo.cpp        X-Mod: synced LFO, ratio type, band-limited modulator
   np_xenv.S         RC envelopes
-  np_runtime.cpp    ISR pools, profiling, USB/MIDI deferral, project load
+  np_runtime.cpp    ISR pools, profiling, USB/MIDI deferral, project load, power-on fallback
   np_ui.cpp         UI event ordering, scale library hook
   np_midi.cpp       MIDI out fan-out and receive fixes
   np_random.cpp     scale-aware automation randomizer
@@ -349,7 +360,13 @@ docs/
   flow changes and the main-loop sequencer speedup.
 - A rare reboot after DELETE+RECORD, reported on the unit, has not been
   reproduced. The telemetry build exists to capture it.
-- The image is close to the bootloader's 512 KiB limit. About 2 KiB is
+- Not fixed, from the stock: a project's events are trusted. A journal
+  damaged in the middle (not just cut short), or Norand's project SysEx
+  (`F0 00 21 50 00 10 00 01 …`) carrying a bad event, can make a handler
+  write outside its object. On the unit that is a fault, which the fault
+  handler turns into a reset. An unknown event id in that SysEx aborts,
+  and the watchdog resets the unit.
+- The image is close to the bootloader's 512 KiB limit. About 1.8 KiB is
   left.
 - Analog behaviour (filter, drive, levels) differs from the bench's digital
   model. Instrument levels were set from the model.

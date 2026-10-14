@@ -258,7 +258,8 @@ class Header:
          self.mn_chord_check, self.nm_key_press,
          self.nm_key_release, self.clear_match, self.load_request,
          self.load_done, self.proj_service,
-         self.save_gate) = struct.unpack_from("<22I", blob, 0x190)
+         self.save_gate, self.boot_load,
+         self.project_fail, self.rotate_guard) = struct.unpack_from("<25I", blob, 0x190)
 
     OFF_FLAGS = 0x05
     OFF_WDG_PR = 0x06
@@ -662,6 +663,52 @@ def build(args):
         poke(0x08127A12, bytes.fromhex("1a79b242"),
              thumb_bl(0x08127A12, hdr.clear_match & ~1),
              "clear patch: record match skips mod notes (D1)")
+
+    # ---- PJ: a project journal cut short no longer hangs the load -------
+    # The replay reads [id][payload] events; an id with no factory (0xFF
+    # where a save was cut off by a power loss, or an erased slot) called
+    # an empty std::function: __throw_bad_function_call -> abort -> b .,
+    # before the stock's own checks.  Slot 0 is loaded at power-on, so the
+    # unit hung there for good.  Now such an id ends the journal as id 0
+    # already does, so a journal without its EOF fails the stock's length
+    # check (0xA1); a first event that is no event fails as 0xA4 before
+    # anything is touched (the stock's "not a SOF" branch would import the
+    # bytes as an old-format project: 255-step patterns from 0xFF).  A
+    # failed check is the stock's error screen (0x0814FA54: the code on SEQ
+    # 1-8, keys 30+31 send the project out over USB, then it halts); at
+    # power-on PB starts an empty project instead.
+    if args.journal_fix:
+        poke(0x08123CAE, bytes.fromhex("2368027c"),
+             bytes.fromhex("0023") + thumb_b_n(0x08123CB0, 0x08123C2E),
+             "journal reader: an unknown event id ends the journal (PJ)")
+        poke(0x08124406, bytes.fromhex("037c07f201178df82430"),
+             bytes.fromhex("a421") + thumb_bl(0x08124408, hdr.project_fail & ~1)
+             + thumb_b_n(0x0812440C, 0x08124356) + bytes.fromhex("00bf"),
+             "journal replay: a first event that is no event fails as 0xA4 (PJ)")
+
+    # ---- PB: a damaged slot 0 at power-on starts an empty project -------
+    # The replay's checks (0xA1..0xA4) go through np_project_fail: during
+    # the power-on load of slot 0 (np_boot_load) a failure is noted and an
+    # empty project replaces the journal; otherwise the stock screen.
+    if args.boot_fallback:
+        poke(0x081199AE, thumb_bl(0x081199AE, 0x08124440),
+             thumb_bl(0x081199AE, hdr.boot_load & ~1),
+             "power-on load of slot 0 -> an empty project if it fails (PB)")
+        for site, code in ((0x08124166, 0xA2), (0x08124362, 0xA3), (0x0812436E, 0xA1)):
+            poke(site, thumb_bl(site, 0x0814FA54),
+                 thumb_bl(site, hdr.project_fail & ~1),
+                 "project check 0x%02X -> noted at power-on (PB)" % code)
+
+    # ---- RG: a pattern rotate stays inside the step buckets ------------
+    # FUNC+UP/DOWN on a pattern of length 0 asked 0x081583AC for the range
+    # 0..255 of a 128-bucket store, and the rotate pass swapped its way
+    # through the memory past it until a list node faulted.  A reversed
+    # range wraps the pass's byte index the same way: only
+    # start <= end <= 127 goes through.
+    if args.rotate_guard:
+        poke(0x08145EE0, thumb_b_w(0x08145EE0, 0x081583AC),
+             thumb_b_w(0x08145EE0, hdr.rotate_guard & ~1),
+             "pattern rotate setup -> only start <= end <= 127 (RG)")
 
     # ---- PL: a project load while playing waits for the pattern's end ---
     # The LOAD key's SEQ press calls the load (0x0811F8DC) directly; the
@@ -1415,6 +1462,12 @@ def main():
                    help="a project loaded while playing takes over at once, mid-pattern (stock)")
     b.add_argument("--no-clear-fix", dest="clear_fix", action="store_false", default=True,
                    help="DELETE+RECORD also resets mod note 0 (layer 1: mod note 1) (stock)")
+    b.add_argument("--no-journal-fix", dest="journal_fix", action="store_false", default=True,
+                   help="a project slot cut short by a power loss hangs its load, at power-on for slot 0 (stock)")
+    b.add_argument("--no-rotate-guard", dest="rotate_guard", action="store_false", default=True,
+                   help="FUNC+UP/DOWN on a pattern of length 0 corrupts memory (stock)")
+    b.add_argument("--no-boot-fallback", dest="boot_fallback", action="store_false", default=True,
+                   help="slot 0 failing its checks at power-on stops on the error screen (stock)")
     b.set_defaults(watchdog=True, lfo=True, xmod=True, sine=True, ui_chords=True,
                    midi=True, xmod_follow_osc1=False,
                    audio_priority=False, func=build)   # K off by default since 2026-09-17:

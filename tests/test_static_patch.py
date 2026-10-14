@@ -300,6 +300,22 @@ def main():
         expect_branch(image, md, 0x08119A70, 'bl', proj_service & ~1)
         expect_branch(image, md, 0x081516A2, 'bl', save_gate & ~1)
         expect_bytes(image, 0x0811F938, struct.pack('<I', load_done | 1), 'PL: load completion invoker')
+    # PJ: a journal cut short ends at its first unknown id; no first event fails as 0xA4
+    boot_load, project_fail = struct.unpack_from('<2I', image, blob_off + 0x1E8)
+    if at(image, 0x08123CAE, 4) != at(stock, 0x08123CAE, 4):
+        expect_bytes(image, 0x08123CAE, bytes.fromhex('0023bde7'), 'PJ: reader, no factory -> no event')
+        expect_bytes(image, 0x08124406, bytes.fromhex('a421'), 'PJ: movs r1, #0xA4')
+        expect_branch(image, md, 0x08124408, 'bl', project_fail & ~1)
+        expect_bytes(image, 0x0812440C, bytes.fromhex('a3e700bf'), 'PJ: b 0x08124356 (the replay returns)')
+    # RG: a pattern rotate stays inside the 128 step buckets
+    rotate_guard = struct.unpack_from('<I', image, blob_off + 0x1F0)[0]
+    if at(image, 0x08145EE0, 4) != at(stock, 0x08145EE0, 4):
+        expect_branch(image, md, 0x08145EE0, 'b', rotate_guard & ~1)
+    # PB: the power-on load of slot 0 and the replay's three checks
+    if at(image, 0x081199AE, 4) != at(stock, 0x081199AE, 4):
+        expect_branch(image, md, 0x081199AE, 'bl', boot_load & ~1)
+        for site in (0x08124166, 0x08124362, 0x0812436E):
+            expect_branch(image, md, site, 'bl', project_fail & ~1)
     # V: the dim SEQ-key level, one immediate per renderer (default 2)
     dim = image[0x0814F05E - BASE]
     for address, reg in ((0x0814F0CE, 0x0A), (0x0814F1E4, 0x09), (0x0814F28C, 0x09), (0x0814F33C, 0x0B)):
@@ -411,6 +427,11 @@ def main():
              (0x08127A12, 4),
              # PL: load request, completion invoker literal, project service, save key
              (0x08149DC6, 4), (0x0811F938, 4), (0x08119A70, 4), (0x081516A2, 4),
+             # PJ: the journal reader, the first event; PB: the power-on load, three checks
+             (0x08123CAE, 4), (0x08124406, 10),
+             (0x081199AE, 4), (0x08124166, 4), (0x08124362, 4), (0x0812436E, 4),
+             # RG: the rotate setup's tail call
+             (0x08145EE0, 4),
              (0x0814F05E, 1), (0x0814F0D0, 1), (0x0814F1E6, 1), (0x0814F28E, 1),
              (0x0814F33E, 1), (0x0814F0F0, 1),
              (0x08109DF4, 4), (0x0814F80C, 4), (0x08157324, 4), (0x08157528, 4),

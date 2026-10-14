@@ -1587,10 +1587,12 @@ extern "C" void np_proj_service(uint8_t *mgr)
         mgr[0x7BC] = 0xFFu;                     /* no pattern change meanwhile */
         auto *seq = reinterpret_cast<uint8_t *>(kSeq);
         const uint32_t pos = *reinterpret_cast<volatile uint32_t *>(seq + 0x48);
-        const uint32_t left = *reinterpret_cast<volatile uint16_t *>(seq + 0x60) - pos;
+        const uint32_t length = *reinterpret_cast<volatile uint16_t *>(seq + 0x60);
+        const uint32_t left = length - pos;
         const bool playing = transport_running();
         const uint32_t into = pos & 0xFFu;      /* ticks into the step */
-        if ((pl[3] & 0x80u) && (!playing || (into >= 16u && into < 64u && left > 256u))) {
+        /* not in the last step -- unless it is the only one */
+        if ((pl[3] & 0x80u) && (!playing || (into >= 16u && into < 64u && (left > 256u || length <= 256u)))) {
             const unsigned slot = pl[3] & 0x7Fu;
             pl[3] = 0u;
             reinterpret_cast<LoadFn>(0x0811F8DDu)(mgr, slot);
@@ -1610,6 +1612,90 @@ extern "C" void np_proj_service(uint8_t *mgr)
         }
     }
     reinterpret_cast<ReplayFn>(0x08125AC5u)(mgr);
+}
+
+/* ---------------------------------------------------------------------
+ * PB: slot 0 failing its checks at power-on starts an empty project.
+ *
+ * main loads slot 0 at power-on (0x081199AE: bl 0x08124440, the read and
+ * the replay).  A journal that fails one of the replay's checks -- 0xA1
+ * no EOF (with PJ, a save cut short by a power loss), 0xA2 the pattern
+ * table, 0xA3, and PJ's 0xA4 for a first event that is no event at all --
+ * went to the error screen 0x0814FA54, which never returns: the code on
+ * SEQ 1-8, keys 30+31 send the project out over USB, then b .  At power-on
+ * that was every power-on, with no way out.  During the power-on load the
+ * failure is noted and the replay goes on (0xA4 returns from it); then the
+ * image buffer gets an empty journal -- a zero header, SOF, EOF -- which is
+ * replayed, and all 64 patterns get 16 steps (an empty journal leaves them
+ * at 0, and a rotate of a 0-step pattern overran its store: RG).  Slot 0 in flash stays as it is until a save.  Any later load
+ * keeps the stock's screen (the watchdog restarts the unit from it).
+ * --------------------------------------------------------------------- */
+namespace {
+inline volatile uint8_t *pboot() { return reinterpret_cast<volatile uint8_t *>(kDiag + D_PBOOT); }
+constexpr uintptr_t kPatternParamVt = 0x0815EE94u;   /* ProjectEvent<PatternParamData> */
+} /* namespace */
+
+extern "C" void np_project_fail(void *ui, unsigned code)
+{
+    volatile uint8_t *pb = pboot();
+    if (pb[0] == 1u) {
+        if (pb[1] == 0u)
+            pb[1] = uint8_t(code);
+        pb[2] = uint8_t(pb[2] + 1u);
+        return;
+    }
+    reinterpret_cast<void (*)(void *, unsigned)>(0x0814FA55u)(ui, code);
+}
+
+extern "C" void np_boot_load(uint8_t *mgr, unsigned slot)
+{
+    volatile uint8_t *pb = pboot();
+    pb[0] = 1u;
+    pb[1] = pb[2] = pb[3] = 0u;
+    reinterpret_cast<void (*)(uint8_t *, unsigned)>(0x08124441u)(mgr, slot);
+    if (pb[1] != 0u) {
+        auto *image = reinterpret_cast<volatile uint8_t *>(0x24000000u);
+        for (unsigned i = 0; i < 0x100u; ++i)
+            image[i] = 0u;
+        image[0x100] = 254u;                    /* SOF */
+        image[0x101] = 9u;                      /* EOF */
+        reinterpret_cast<ReplayFn>(0x08124055u)(mgr);
+        /* one transaction tag, as 0x08157578 assigns them */
+        *reinterpret_cast<volatile uint32_t *>(mgr + 0x58) = 0u;
+        volatile uint32_t &count = *reinterpret_cast<volatile uint32_t *>(mgr + 0x4C);
+        count = count + 1u;
+        const uint32_t tag = count & 0x3FFFu;
+        /* every one of the 64 patterns gets 16 steps.  The event names a
+         * pattern (byte 6) and takes effect only on one a layer is playing,
+         * so layer 0 visits each (0x08125A90(mgr, pattern, layer), the
+         * stock's switch, immediate with the transport stopped) and ends on
+         * pattern 0; layer 1's pattern gets its event again at the end, to
+         * refresh that layer's copy */
+        using SwitchFn = void (*)(uint8_t *, unsigned, unsigned);
+        for (unsigned step = 0; step <= 64u; ++step) {
+            const unsigned pattern = step < 64u ? 63u - step : mgr[0x184];
+            if (step < 64u)
+                reinterpret_cast<SwitchFn>(0x08125A91u)(mgr, pattern, 0u);
+            auto *e = static_cast<uint8_t *>(reinterpret_cast<void *(*)(unsigned)>(0x081591D5u)(12u));
+            if (!e)
+                break;
+            for (unsigned i = 0; i < 12u; ++i)
+                e[i] = 0u;
+            *reinterpret_cast<uint32_t *>(e) = kPatternParamVt;
+            e[4] = uint8_t(tag);
+            e[5] = uint8_t(tag >> 8);
+            e[6] = uint8_t(pattern);
+            e[8] = 16u;                         /* parameter 0 (byte 7), the length */
+            void *p = e;
+            reinterpret_cast<void (*)(void *, void **)>(0x081576D5u)(mgr, &p);
+            if (p) {
+                const uint32_t vt = *static_cast<const uint32_t *>(p);
+                reinterpret_cast<void (*)(void *)>(reinterpret_cast<const uint32_t *>(vt)[1])(p);
+            }
+        }
+        pb[3] = 1u;
+    }
+    pb[0] = 0u;
 }
 
 /* ---------------------------------------------------------------------
@@ -1647,6 +1733,8 @@ extern "C" void np_modnote_replay(uint8_t *mgr, uint32_t note, uint32_t layer)
         if (project[0x6034 + layer] != 0u)        /* the handler's own gate */
             continue;
         uint32_t slot = rec[6], local = rec[7];
+        if (slot >= 19u || local >= 9u)           /* a damaged project's record */
+            continue;
         uint16_t raw = static_cast<uint16_t>(rec[8] | rec[9] << 8);
         *reinterpret_cast<float *>(project + 0x4268 + layer * 0x180Cu + (slot * 9u + local) * 4u) =
             static_cast<float>(raw);

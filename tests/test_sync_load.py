@@ -22,7 +22,9 @@ brings slot 0 back:
   5. the new project's pattern is 8 steps, the old 16: its step 1 still on
      the boundary, then every 8 steps;
   6. asked in the last step: the read waits for the next pass, the old
-     project plays it whole and the new one starts at the boundary after.
+     project plays it whole and the new one starts at the boundary after;
+  7. a one-step pattern: its only step is also its last, and the read
+     still starts in it (p60; before, the load waited for a stop).
 
 The emulator's projects grow out of a two-event journal, and a save leaves
 the patterns without a section of their own pointing at the journal's end,
@@ -270,12 +272,33 @@ def late():
     check('one replay', len(rep), 1)
 
 
+def one_step():
+    print('7. the playing pattern is one step long')
+    r = Rig()
+    m = r.m
+    r.length(1)
+    m.tap(27); m.settle(20)
+    m.settle(600)                                             # a few passes of the one step
+    r.load()
+    m.settle(1500)
+    rep, read = r.of('replay'), r.of('read')
+    length = struct.unpack('<H', bytes(m.uc.mem_read(SEQ + 0x60, 2)))[0]
+    m.tap(27); m.settle(20)
+    check('the read starts while playing (ticks %s)' % [p for _, p in read], len(read), 1)
+    check('one replay, before the step ends (tick %s)' % [p for _, p in rep],
+          (len(rep), bool(rep) and 32 <= rep[0][1] < 256), (1, True))
+    check('the loaded project (16 steps) plays: length %d ticks' % length, length, 4096)
+    check('D_PLOAD %s, no Error_Handler, no load failure' % bytes(m.uc.mem_read(D_PLOAD, 4)).hex(),
+          (bytes(m.uc.mem_read(D_PLOAD, 4)), m.errors, r.of('fail')), (b'\x01\x01\x01\x00', [], []))
+
+
 def main():
     mid_pattern()
     stopped()
     save_and_pattern()
     other_length()
     late()
+    one_step()
     print('%s -- a project loaded while playing takes over at the pattern\'s end (%d checks)'
           % ('PASS' if fail == 0 else 'FAIL', ok + fail))
     return 1 if fail else 0

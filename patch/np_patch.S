@@ -359,6 +359,9 @@ np_choke_samples:
     .word   np_load_done                 /* +0x1DC ...its read completed       */
     .word   np_proj_service              /* +0x1E0 ...taken over at pattern end */
     .word   np_save_gate                 /* +0x1E4 ...and no save meanwhile    */
+    .word   np_boot_load                 /* +0x1E8 PB power-on load of slot 0  */
+    .word   np_project_fail              /* +0x1EC ...its checks' error screen */
+    .word   np_rotate_guard              /* +0x1F0 RG rotate inside the buckets */
 
 /* ------------------------------------------------------------------ */
 /* Replaces "bl SystemInit" in Reset_Handler.  This is the first       */
@@ -2381,6 +2384,29 @@ np_clear_match:
     bx      lr
 1:  cmp     r2, #0               /* a mod note's: not equal                 */
     bx      lr
+
+/* RG: a pattern rotate whose range runs past the 128 step buckets is     */
+/* dropped.  0x08145EC0 (the sequencer's rotate setup, called by the       */
+/* RotatePatternData handler 0x08129410) tail-calls 0x081583AC(store, dir, */
+/* start, end) with the event's bytes; FUNC+UP/DOWN builds them from the   */
+/* pattern's length - 1, which for a pattern of length 0 is 255, and the   */
+/* rotate pass (0x0815888C) then swaps buckets 255..0 -- through the       */
+/* memory past the store, until a garbage list node faults.  The pass      */
+/* walks a byte index from one end to the other (down from `end`, or up    */
+/* from `start`), so a reversed range wraps past 0 or 127 the same way:    */
+/* only start <= end <= 127 goes through.                                  */
+    .thumb_func
+    .align 2
+    .global np_rotate_guard
+np_rotate_guard:
+    cmp     r3, #127
+    bhi     1f
+    cmp     r2, r3
+    bhi     1f
+    movw    r12, #:lower16:(0x081583AC | 1)
+    movt    r12, #:upper16:(0x081583AC | 1)
+    bx      r12
+1:  bx      lr
 
     .thumb_func
     .align 2

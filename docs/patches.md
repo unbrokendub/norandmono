@@ -1103,6 +1103,157 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
+## PJ, PB: a save cut short no longer bricks the power-on (p60 — 2026-10-13)
+
+**The stock.** A project slot (32 × 512 KB on the QSPI flash, slot n at
+`n << 19`) is a 0x100-byte header and an event journal: `[id][payload]` from
+SOF (254) to EOF (9).  A save erases the slot and programs it from the
+start, so a power loss in the middle leaves either a journal that runs into
+erased flash (`0xFF`) or an erased slot.  main loads **slot 0 at every
+power-on** (`0x081199AE`: `bl 0x08124440`, the read and the replay
+`0x08124054`).
+
+The journal reader `0x08123C18` looks an id up in the factory registry
+(`0x08123A88`, `unordered_map::operator[]`).  When it finds no factory it
+calls the empty `std::function`, which throws `bad_function_call`
+(`0x08159882`), then `abort` (`0x0815A224`), then `b .` at `0x0815A6E0`.
+That happens before any of the replay's own checks.  The first event takes
+the same path at `0x08124406`.  An id of 0 already ends the journal
+cleanly; only unknown ids abort.
+
+Reproduced in sysemu on the stock image: slot 0 cut short stops the
+power-on load in the abort loop, and main is never reached.  Our watchdog
+did not help, because it is armed on the first main-loop pass.
+
+The replay does have checks: `0xA1` no length (no EOF seen), `0xA2` the
+header's pattern table differs from the rebuilt one, `0xA3`.  A failed
+check calls the error screen `0x0814FA54`.  The screen shows the code on
+SEQ 1–8 and waits for keys 30+31.  With USB connected, those keys send the
+project out as SysEx (`0x08123FE8`, `0x0812471C`).  Then the screen halts
+(`b .` at `0x0814FAE2`).  It never returns and never repairs the slot, so
+even a detected bad slot 0 stops every power-on.
+
+**PJ** (`--no-journal-fix` for the stock):
+- **The reader.** At `0x08123CAE`, the empty-function path becomes
+  `movs r3,#0; b 0x08123C2E`, the reader's own "no event" exit (the one id 0
+  takes).  A journal cut short therefore ends at its first erased byte.  It
+  has no EOF, so the replay's length check fails with `0xA1`.
+- **The first event.** At `0x08124406` it becomes `movs r1,#0xA4;
+  bl np_project_fail; b 0x08124356`.  That fails as `0xA4` and returns from
+  the replay before anything is reset.  The stock's own "not a SOF" branch
+  was not used: it imports the bytes as an old-format project, and from
+  `0xFF` it built 255-step patterns.
+
+**PB** (`--no-boot-fallback` for the stock):
+- **The power-on load.** `0x081199AE` calls `np_boot_load`, and the three
+  check calls (`0x08124166` A2, `0x08124362` A3, `0x0812436E` A1) call
+  `np_project_fail`.
+- **During the power-on load,** a failure is noted (`D_PBOOT`, `0x13F0`:
+  running, first code, count, fell back) and the replay continues.  The
+  image buffer then gets an empty journal (zero header, SOF, EOF), which is
+  replayed.  An empty journal leaves every pattern at 0 steps, so all 64
+  get 16 with the event the UI sends (`PatternParamData`; its byte 6 names
+  a pattern, and it takes effect only on a pattern a layer is playing).
+  Layer 0 therefore visits each one through the stock's switch
+  `0x08125A90(mgr, pattern, layer)` and ends on pattern 1, and layer 1's
+  pattern gets the event again.  With 0-step patterns, LOAD + SEQ
+  requested no load in sysemu, and a rotate overran its store (RG below).
+- **Slot 0 in flash is left as it is** until the next save.
+- **Any later load** keeps the stock's screen.  On the unit, the watchdog
+  restarts it from there after 16 s, and the restart loads slot 0.
+
+`tests/test_project_journal.py` (16 checks; every power-on is a fresh boot):
+1. Control: the stock with slot 0 cut short ends in the abort loop.
+2. Slot 0 cut short: main runs, `0xA1`, an empty project.  Each layer is
+   on its own pattern, and patterns 8, 17, 34, 49 and 64 have 16 steps.
+   Slot 0 is untouched, and it plays.
+3. Slot 0 erased: `0xA4`, the same result.
+4. A sound slot 0: no fallback.
+5. Recovery: after the fallback, FUNC+SAVE writes slot 0, and the next
+   power-on loads it without a fallback.
+6. A damaged slot 1 loaded after power-on: the stock screen with `0xA1`,
+   no abort.
+
+**RG: a pattern rotate stays inside the step buckets** (`--no-rotate-guard`
+for the stock).  A UI fuzz in mod-note mode found this crash.  The steps
+were PATTERN + PAGE D + SEQ 1, which selects pattern 49, a pattern of
+length 0 in sysemu's project.  Then FUNC+UP faulted in a `std::list` swap
+(`0x08159820`).
+
+- **The mechanism.** The RotatePatternData handler (`0x08129410`) passes
+  its range to `0x081583AC(store, direction, start, end)` through
+  `0x08145EC0`.  The range comes from the pattern's length − 1, which is
+  255 for a length of 0.  A track's store holds 128 buckets of 12 bytes.
+  The rotate pass (`0x0815888C`) then swapped buckets 255 down to 0
+  through the memory past the store until a node was garbage.
+- **Not changed:** a stock rotate at lengths 1–64 (checked at 15 lengths).
+- **The fix:** the tail call at `0x08145EE0` goes to `np_rotate_guard`.
+  The pass walks a byte index from one end of the range to the other: down
+  from `end`, or up from `start`.  So a reversed range wraps past 0 or 127
+  the same way, and only `start <= end <= 127` goes through.
+- **Reach on the unit.** In the stock it needs a pattern of length 0.  An
+  empty journal leaves every unused pattern at 0, and so did PB's fallback
+  before it set all 64.  A unit's own projects would need a pattern saved
+  at length 0; whether one can be is not verified.
+
+`tests/test_rotate_guard.py` (11 checks):
+1. Control: the stock faults on that rotate.
+2. With RG, FUNC+UP/DOWN on the 0-step pattern faults nothing, and every
+   list is intact.
+3. A 16-step pattern still rotates: its notes move and none is lost.
+4. A reversed range (start 20, end 5) sent as an event: the stock's lists
+   break, and RG drops it.
+
+Image 522,528 bytes.
+
+**Also in p60:**
+- **PL: a one-step pattern.** `np_proj_service` started the slot's read
+  only outside the last step (`left > 256`).  A one-step pattern has only a
+  last step, so a load asked while it played waited for a stop.  Pattern
+  changes and saves stayed blocked meanwhile.  The read may now start in
+  the only step.  `test_sync_load.py` scenario 7.
+- **N2: a bounds check.** `np_modnote_replay` skips a record whose slot or
+  local index is out of range (19 × 9).  The stock handler has no such
+  check either (`0x08117E94`); only a damaged project carries one.
+
+**Found by the audit, not changed:**
+- **The stock expects every pattern to have steps.**  With the 0-step
+  patterns an empty journal leaves (sysemu's projects), three things broke:
+  - LOAD + SEQ asked no load;
+  - a rotate overran its store (RG fixes that one);
+  - clearing a step's probability (`ClearStepProbabilityData`, handler
+    `0x08128868`) called an empty callback in the step-list walker
+    `0x08157DC4` (PC 0, found by the UI fuzz in normal mode).
+
+  So PB gives all 64 patterns 16 steps, and the UI fuzz now starts from a
+  project like that.  A unit's own projects are expected to have no 0-step
+  pattern, since the stock would trip over one.  That is an inference, not
+  checked against a unit's project.
+- **Event payloads are trusted.**  A journal with valid ids but bad fields
+  made `0x081583E0` write through a pointer built from them (sysemu: an
+  unmapped write).  On the unit that is a fault, and A1 resets.  Only a
+  slot damaged in the middle carries such events, not one cut short.
+  Norand's project SysEx carries them too.
+- **Norand's project SysEx.**  The receiver (`0x08119D20`, MIDI object
+  `+0xD1C` mode, `+0xD22` buffer, `+0xDA4` index) recognises
+  `F0 00 21 50 00 10 00 01`.  At F7 it unpacks the message and parses it as
+  journal events with an XOR check (`0x081266FC`).  An unknown id there
+  also aborts; the watchdog resets the unit after 16 s.
+- **The receive index has no bound.**  Only data bytes (< 0x80), F0 and F7
+  reach the receiver.  At byte 130 the write lands on the index's low byte
+  and folds it back inside the buffer, so the writes stay inside
+  `+0xD22..+0xDA4`.
+- **Other `abort` paths.**  Of the 101 calls to the `__throw_*` helpers
+  and `abort`, 27 are `length_error` for a vector or deque at max_size,
+  which does not happen.  2 are `bitset<17>::set/reset` on the UI modifier
+  mask.  24 are `bad_function_call`; the data-driven ones are the journal
+  reader, the replay's first event, the USB dump of the error screen and
+  the project SysEx.  31 are the allocator's size check: `bad_alloc` or
+  `bad_array_new_length` for a request over 1 GB.  17 call `abort`
+  directly, among them operator new on a failed malloc (`0x081591EE`) and
+  consistency checks in the note handlers (`0x0811758A`, `0x08117A2A`);
+  these 17 were not traced one by one.
+
 ## SL3: library loads left trigs on the pattern (p59 — 2026-10-13)
 
 The stock value handlers in the settings end by consuming their key

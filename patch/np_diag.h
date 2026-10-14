@@ -82,6 +82,11 @@
 /* p54: draws the randomizer threw away as mute (np_mnrand.cpp mute()), low
  * 24 bits; p55: the top byte is the style the last A# chose, + 1 */
 #define D_MNRAND_MUTED   0x1BFC
+/* PB (p60): the power-on load of slot 0.  Bytes: [0] 1 while it runs,
+ * [1] the first check its journal failed (0xA1..0xA4; 0: none), [2] checks
+ * failed, [3] 1: it started an empty project instead.  In the gap after
+ * the slot-hold table (np_patch.S: D_BLOCKFRAC ends at 0x13E4). */
+#define D_PBOOT          0x13F0
 #define D_LED_PENDING 0xD50
 #define D_LED_EOT 0xD54
 #define D_LED_BUSY 0xD58
