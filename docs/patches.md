@@ -1103,6 +1103,16 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
+## R7: generator ranges +60 % (p61 — 2026-10-15)
+
+`Gen::range` widens every drawn range by three tenths of its width on each
+side (was a fifth): 60 % wider than the recipes' own ranges in all (p49
++25 %, p50 +15 %, p61 +20 %), clamped to 0..0xFFFF.  A VCO's tune and detune
+still draw `exact()`, so pitches are as before.  Bootloader, static and a
+generator smoke (single instruments, a drum kit, both full sets: 96
+instruments, no fault) pass; the long sound suites were not run, and their
+per-instrument bounds may now be crossed more often.  Image 522,528 bytes.
+
 ## PJ, PB: a save cut short no longer bricks the power-on (p60 — 2026-10-13)
 
 **The stock.** A project slot (32 × 512 KB on the QSPI flash, slot n at

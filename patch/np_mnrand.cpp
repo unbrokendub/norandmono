@@ -212,9 +212,9 @@ struct Gen {
     {
         return a <= b ? a + below(b - a + 1u) : b + below(a - b + 1u);
     }
-    /* p49/p50: every drawn value's range 40 % wider -- a fifth of it more
-     * on each side, within 0..0xFFFF (p49 +25 %, p50 another 15 %); a
-     * VCO's tune and detune draw exact() */
+    /* p49/p50/p61: every drawn value's range 60 % wider -- three tenths of
+     * it more on each side, within 0..0xFFFF (p49 +25 %, p50 another 15 %,
+     * p61 another 20 %); a VCO's tune and detune draw exact() */
     unsigned range(unsigned a, unsigned b)
     {
         if (a > b) {
@@ -222,7 +222,7 @@ struct Gen {
             a = b;
             b = t;
         }
-        const unsigned w = (b - a) / 5u;
+        const unsigned w = (b - a) * 3u / 10u;
         return exact(a > w ? a - w : 0u, b + w < 0xFFFFu ? b + w : 0xFFFFu);
     }
     int irange(int a, int b) { return a + int(below(unsigned(b - a + 1))); }
