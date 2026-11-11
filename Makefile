@@ -87,7 +87,7 @@ test-patch: build/venv/bin/python build/mono_V2.2.0r-patched.syx
 	build/venv/bin/python tests/test_scale_library.py
 	build/venv/bin/python tests/test_project_journal.py
 	build/venv/bin/python tests/test_rotate_guard.py
-	build/venv/bin/python tests/test_led_white.py
+	build/venv/bin/python tests/test_led_level.py
 	build/venv/bin/python tests/test_bootloader_accepts.py
 
 test-ui: build/venv/bin/python build/mono_V2.2.0r-patched.syx

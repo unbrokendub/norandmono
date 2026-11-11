@@ -34,6 +34,10 @@ def main(image='build/firmware-patched.bin'):
     m.factory_defaults()
     m.settle(200, audio=1)
     uc = m.uc
+    # LV (p62) levels every target before this fade; preset 5 is the stock's
+    # own levels, so the fade itself is what is measured here (D_LED_LEVEL;
+    # an unused DTCM word on the stock image)
+    uc.mem_write(0x2000E400 + 0x13F4, struct.pack('<I', 5))
     drv = m.call_preserving(0x0810977D, m.call_preserving(0x08109615), 4)
     u8 = lambda a: uc.mem_read(a, 1)[0]
     f32 = lambda a: struct.unpack('<f', bytes(uc.mem_read(a, 4)))[0]

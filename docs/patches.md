@@ -1103,50 +1103,68 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
-## WL: the white LEDs, dimmer (p62 — 2026-11-11)
+## LV: the LEDs levelled (p63 — 2026-11-11; replaces p62's WL)
 
-The white LEDs are FOLLOW (LED 24), SEQ 1–16 (25..40), TYPE (45) and WAVE
-(46).  In a dark room they are much brighter than the coloured ones, and
-FOLLOW sits at 63 of 63 while it is on.  The indices were read off sysemu:
-each key was tapped and the 70 requested levels diffed (driver `0x2000190C`,
-entry `+0x94 + 20 i`).
+The stock asks each LED for its own level: FOLLOW 63 when on, TYPE 32/48,
+the current pattern 24, a note step 16, the dim states 2..7.  In a dark
+room the white ones glare (FOLLOW, SEQ 1–16, TYPE, WAVE).  p62's WL scaled
+the white LEDs to a quarter, but the aim is one low level for every LED,
+with only the playhead and the tempo blink brighter.
 
-- **Where the level goes out.** The writer `0x08109FD0` sends one LED per
-  SysTick as `80 <address> <level>`.  It clamps the smoothed request to
-  0..63 and stores it at `+0x92` for the frame (`0x0810A0D0`).  It decides
-  "converged" from the unclamped value separately.
-- **The fix.** That store goes through `np_led_scale`, which scales the
-  white LEDs' level by N/64 (a lit LED stays at least 1) and leaves every
-  other LED alone.  The writer's bookkeeping is unchanged.
-- **How dark it can go.** TYPE and WAVE show the type and the wave by
-  brightness: TYPE 32/48, WAVE 4/8/12/16.  At the default 16/64 they send
-  8/12 and 1/2/3/4, still apart; below that WAVE's steps merge.  So 25 % is
-  the floor for this method.  Darker would need the HT16D35A's global
-  brightness, which the init sends as `37 3F` (`0x08109B1A`), and that dims
-  the coloured LEDs too.
-- **TEMPO+FOLLOW.** It steps the scale 25 → 50 → 100 % (`D_LED_WHITE`,
-  `0x13F4`), back to the build's default at every power-on.  The press runs
-  the stock in mode 0 and consumes the key, so FOLLOW is not toggled (the
-  stock's TEMPO+FOLLOW is a plain FOLLOW toggle).  The white LEDs are marked
-  dirty so the new scale shows at once.  TEMPO+FUNC+FOLLOW, the pitchbend
-  randomizer, is unchanged.
-- **Build option.** `--white-led PERCENT` sets the default (25).
-  `--white-led 100` starts at the stock levels; the scaler then sends them
-  unchanged.
+**Where.** M2's `np_led_smooth` sits in the writer `0x08109FD0` right where
+the target meets the fade (`0x0810A098`).  It now first passes the target
+through `np_led_target` (np_ui.cpp) and writes the result back to `s15`
+too, because the writer's dirty test compares `(u32)s15` with what it
+sends.  The fade still runs, so changes stay smooth.  The writer's target
+is `base + pulse + overlay` (entry `+0x94..+0x96`) plus an animation term:
+`+0x98 / +0x9A × 16`, negative over a base of 31.  That animation is the
+playhead (period 256) and PAGE A's tempo blink (period 150).
 
-`tests/test_led_white.py` (9 checks) reads the SPI frames.
-- Control: the stock sends FOLLOW 62 and a SEQ note 15.  Its fade settles
-  one short of 63 and 16, which M2 fixes.
-- Default: FOLLOW 15, the SEQ note 4, TYPE 8/12, WAVE 1/2/3/4.  PAGE A and
-  the mini keyboard go out as asked.
-- TEMPO+FOLLOW: 31, 63, back to 15, with no FOLLOW toggle and no event.
-  FOLLOW alone still toggles.
-- TEMPO+FUNC+FOLLOW leaves the scale alone.
+**The levelling**, preset `{dim, normal, bright, high}`:
+- off stays off;
+- a static request of 1..7 goes to `dim`, 8..23 to `normal`, 24 and up to
+  `bright`;
+- TYPE (LED 45) and WAVE (46) show the type and the wave by brightness, so
+  they keep small steps: TYPE 16/32/48 → 1/2/3, WAVE 4/8/12/16 → 1..4
+  (scaled up above `normal` 4);
+- a positive animation rises to `high`; a negative one darkens the LED in
+  proportion.
 
-The tests boot fresh: a restored snapshot leaves the patched writer waiting
-for an SPI end-of-transfer that the snapshot does not carry.
-`test_seq_led`, `test_led_fade`, `test_ui_chord`, `test_scale_library`,
-`test_spi_p6`, static and bootloader pass.  Image 522,752 bytes.
+**Presets:**
+- 1 `{1,1,1,4}`: every lit LED at the HT16D35A's lowest PWM step, 1/63.
+  Dim, normal and bright then look the same: in pattern mode the current
+  pattern no longer stands out, and in the parameter views neither do
+  lock steps.
+- 2 `{1,2,3,8}`, 3 `{2,4,6,16}`, 4 `{3,8,12,32}`: brighter, with the
+  three classes apart.
+- 5: the stock's own levels.
+
+`--led-level` sets the power-on preset (default 1).  TEMPO+FOLLOW steps
+1 → 2 → 3 → 4 → 5 → 1 (`D_LED_LEVEL`, `0x13F4`) until the next power-on.
+The press runs the stock in mode 0 and consumes the key, so FOLLOW is not
+toggled; the stock's TEMPO+FOLLOW was a plain FOLLOW toggle.  All 70 LEDs
+are marked dirty so the change shows at once.  TEMPO+FUNC+FOLLOW, the
+pitchbend randomizer, is unchanged.  Below preset 1 only the HT16D35A's
+global brightness is left (the init sends `37 3F` at `0x08109B1A`); that
+is not used.
+
+After a few TEMPO presses the stock starts a tempo blink on PAGE A, the
+first step and the selected key (the animation fields; the tempo does not
+change).  Those blinks level as `high` like PAGE A's.
+
+`tests/test_led_level.py` (12 checks, read off the SPI frames, fresh boots):
+1. Control: the stock sends FOLLOW 62, a note step 15 and PAGE A 15.
+2. Preset 1: every lit LED sends 1 (FOLLOW, note step, PAGE A, keyboard
+   bright and dim, the selected knob), TYPE 2/3, WAVE 1/2/3/4.
+3. Playing: the playhead reaches 3–4, PAGE A blinks above 1, and FOLLOW
+   stays at 1.
+4. TEMPO+FOLLOW: FOLLOW 3, 6, 12, 63, 1, and a dim key 1, 2, 3, 2, 1, with
+   no toggle and no event.  FOLLOW alone toggles.
+5. TEMPO+FUNC+FOLLOW leaves the preset alone.
+
+`test_led_fade` now runs at preset 5, so that M2's fade itself is what it
+measures.  `test_seq_led`, `test_ui_chord`, `test_scale_library`,
+`test_spi_p6`, static and bootloader pass.  Image 523,104 bytes.
 
 ## R7: generator ranges +60 % (p61 — 2026-10-15)
 

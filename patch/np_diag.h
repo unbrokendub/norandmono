@@ -87,9 +87,9 @@
  * failed, [3] 1: it started an empty project instead.  In the gap after
  * the slot-hold table (np_patch.S: D_BLOCKFRAC ends at 0x13E4). */
 #define D_PBOOT          0x13F0
-/* WL (p62): the white LEDs' scale, /64, as TEMPO+FOLLOW last set it; 0
- * (every boot) means np_led_white, the build's default */
-#define D_LED_WHITE      0x13F4
+/* LV (p62): the LED level preset as TEMPO+FOLLOW last set it (1..4, 5 =
+ * the stock's levels); 0 (every boot) means np_led_level, the build's */
+#define D_LED_LEVEL      0x13F4
 #define D_LED_PENDING 0xD50
 #define D_LED_EOT 0xD54
 #define D_LED_BUSY 0xD58

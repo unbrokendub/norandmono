@@ -362,10 +362,10 @@ np_choke_samples:
     .word   np_boot_load                 /* +0x1E8 PB power-on load of slot 0  */
     .word   np_project_fail              /* +0x1EC ...its checks' error screen */
     .word   np_rotate_guard              /* +0x1F0 RG rotate inside the buckets */
-    .global np_led_white
-np_led_white:
-    .word   16                           /* +0x1F4 WL white LEDs, /64, patch.py */
-    .word   np_led_scale                 /* +0x1F8 ...applied as each is sent  */
+    .global np_led_level
+np_led_level:
+    .word   1                            /* +0x1F4 LV LED level preset, patch.py */
+    .word   np_led_target                /* +0x1F8 ...each LED's target, levelled */
 
 /* ------------------------------------------------------------------ */
 /* Replaces "bl SystemInit" in Reset_Handler.  This is the first       */
@@ -1913,11 +1913,27 @@ np_flash_write:
 /* Out: s14 = s'.  s10-s13 are free (the stock reloads s13 after this   */
 /* and this is an exception handler with its own FP frame); lr was      */
 /* pushed at entry and already spent on two bl's before this point.     */
+/*                                                                      */
+/* LV (p62): the target is levelled first (np_led_target, np_ui.cpp):   */
+/* every lit LED to one low level, the animated ones (the playhead, the */
+/* tempo blink) brighter.  It comes back in s15 as well, because the    */
+/* writer's dirty test after this compares (u32)s15 with what it sends. */
+/* Live across the call: r0, r2, r3 (the entry), r4, s14, s15; s0-s13   */
+/* are dead at this point of the writer.                                */
 /* ------------------------------------------------------------------ */
     .thumb_func
     .align 2
     .global np_led_smooth
 np_led_smooth:
+    push      {r0, r1, r2, r3, r4, lr}
+    vpush     {s14, s15}
+    mov       r0, r3                    /* the entry, fields at +0x94      */
+    mov       r1, r2                    /* the LED index                   */
+    vmov.f32  s0, s15                   /* the stock's target              */
+    bl        np_led_target
+    vpop      {s14, s15}
+    vmov.f32  s15, s0                   /* the levelled target             */
+    pop       {r0, r1, r2, r3, r4, lr}
     vsub.f32  s12, s15, s14             /* d = t - s                      */
     vabs.f32  s13, s12
     vmov.f32  s11, #1.0
@@ -2411,45 +2427,6 @@ np_rotate_guard:
     movt    r12, #:upper16:(0x081583AC | 1)
     bx      r12
 1:  bx      lr
-
-/* WL: the white LEDs, dimmer.  The writer 0x08109FD0 sends one LED per  */
-/* SysTick as `80 <address> <level>`, the level (0..63, linear PWM) the   */
-/* smoothed request it has just clamped; it stores it at +0x92 for the    */
-/* frame (0x0810A0D0) and compares the unclamped value with the target    */
-/* separately, so scaling the stored byte changes what the HT16D35A shows */
-/* and nothing of the writer's bookkeeping.  White: FOLLOW (LED 24), SEQ  */
-/* 1-16 (25..40), TYPE (45), WAVE (46).  Level x scale/64, a lit LED at   */
-/* least 1: at the default 16/64 TYPE's 32/48 and WAVE's 4/8/12/16 (they  */
-/* show the type and wave by brightness) stay apart.  The scale is        */
-/* D_LED_WHITE, which TEMPO+FOLLOW cycles (np_ui.cpp), else np_led_white. */
-/* Entry r1 = level, r2 = LED index, r4 = driver; r0, r2, r3 and the FP   */
-/* registers are live in the writer.                                      */
-    .thumb_func
-    .align 2
-    .global np_led_scale
-np_led_scale:                    /* for `strb.w r1,[r4,#0x92]` at 0x0810A0D0 */
-    cbz     r1, 2f               /* off stays off                           */
-    cmp     r2, #24
-    blo     2f
-    cmp     r2, #40
-    bls     1f
-    cmp     r2, #45
-    beq     1f
-    cmp     r2, #46
-    bne     2f
-1:  ldr     r12, =(DIAG + D_LED_WHITE)
-    ldr     r12, [r12]
-    cmp     r12, #0
-    bne     3f
-    ldr     r12, =np_led_white
-    ldr     r12, [r12]
-3:  mul     r1, r1, r12
-    lsrs    r1, r1, #6
-    it      eq
-    moveq   r1, #1
-2:  strb    r1, [r4, #0x92]
-    bx      lr
-    .ltorg
 
     .thumb_func
     .align 2

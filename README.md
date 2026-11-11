@@ -109,10 +109,12 @@ The instrument list is in [docs/instruments.md](docs/instruments.md).
   step 1, like a pattern change.
 - **Dimmer "dim" SEQ LED state,** so dim and bright steps are easy to tell
   apart.
-- **Dimmer white LEDs.** FOLLOW, SEQ 1–16, TYPE and WAVE start at 25 % of
-  the stock brightness; the coloured LEDs are unchanged. TEMPO+FOLLOW steps
-  them through 25, 50 and 100 % until power-off. `--white-led` sets the
-  default.
+- **Levelled LEDs for a dark room.** Every lit LED is at the lowest
+  brightness step. Only the playing step and PAGE A's tempo blink are
+  brighter; TYPE and WAVE keep small steps, so the type and the wave still
+  show. TEMPO+FOLLOW steps through brighter presets (dim, normal and bright
+  then apart) and the stock levels, until power-off. `--led-level` sets
+  the power-on preset.
 
 ---
 
@@ -370,7 +372,7 @@ docs/
   write outside its object. On the unit that is a fault, which the fault
   handler turns into a reset. An unknown event id in that SysEx aborts,
   and the watchdog resets the unit.
-- The image is close to the bootloader's 512 KiB limit. About 1.5 KiB is
+- The image is close to the bootloader's 512 KiB limit. About 1.2 KiB is
   left.
 - Analog behaviour (filter, drive, levels) differs from the bench's digital
   model. Instrument levels were set from the model.

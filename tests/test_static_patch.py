@@ -311,12 +311,10 @@ def main():
     rotate_guard = struct.unpack_from('<I', image, blob_off + 0x1F0)[0]
     if at(image, 0x08145EE0, 4) != at(stock, 0x08145EE0, 4):
         expect_branch(image, md, 0x08145EE0, 'b', rotate_guard & ~1)
-    # WL: the white LEDs' level, scaled as the LED writer stores it for the frame
-    led_white, led_scale = struct.unpack_from('<2I', image, blob_off + 0x1F4)
-    if not 1 <= led_white <= 64:
-        fail("WL: white LED scale %d is not 1..64" % led_white)
-    if at(image, 0x0810A0D0, 4) != at(stock, 0x0810A0D0, 4):
-        expect_branch(image, md, 0x0810A0D0, 'bl', led_scale & ~1)
+    # LV: the LED level preset the image starts on (np_led_smooth levels the targets)
+    led_level = struct.unpack_from('<I', image, blob_off + 0x1F4)[0]
+    if not 1 <= led_level <= 5:
+        fail("LV: LED level preset %d is not 1..5" % led_level)
     # PB: the power-on load of slot 0 and the replay's three checks
     if at(image, 0x081199AE, 4) != at(stock, 0x081199AE, 4):
         expect_branch(image, md, 0x081199AE, 'bl', boot_load & ~1)
@@ -436,8 +434,8 @@ def main():
              # PJ: the journal reader, the first event; PB: the power-on load, three checks
              (0x08123CAE, 4), (0x08124406, 10),
              (0x081199AE, 4), (0x08124166, 4), (0x08124362, 4), (0x0812436E, 4),
-             # RG: the rotate setup's tail call; WL: the LED writer's frame level
-             (0x08145EE0, 4), (0x0810A0D0, 4),
+             # RG: the rotate setup's tail call
+             (0x08145EE0, 4),
              (0x0814F05E, 1), (0x0814F0D0, 1), (0x0814F1E6, 1), (0x0814F28E, 1),
              (0x0814F33E, 1), (0x0814F0F0, 1),
              (0x08109DF4, 4), (0x0814F80C, 4), (0x08157324, 4), (0x08157528, 4),

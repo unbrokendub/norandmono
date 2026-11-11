@@ -141,31 +141,90 @@ extern "C" void np_ui_begin_unlink(void *ui, unsigned)
 }
 
 extern "C" void np_scale_library(unsigned page, unsigned seq);
-extern "C" const uint32_t np_led_white;
+extern "C" const uint32_t np_led_level;
 
-/* WL (p62): TEMPO+FOLLOW steps the white LEDs (np_led_scale) through 25,
- * 50 and 100 % (16, 32, 64 of 64).  The writer only sends an LED whose
- * request changed, so the white ones are marked dirty to show the new
- * scale at once (driver 0x2000190C, entry +0x94 + 20 i, dirty at +3). */
+/* LV (p62): the LEDs levelled.  The stock asks each LED for its own level
+ * -- FOLLOW 63 when on, TYPE 32/48, the current pattern 24, a note step 16,
+ * the dim states 2..7 -- and the white LEDs at those levels glare in a dark
+ * room.  The writer's target for each LED (np_led_smooth, before its fade)
+ * becomes one of a few low levels instead:
+ *   off stays off; a dim state (1..7) -> dim; 8..23 -> normal; 24+ -> bright;
+ *   TYPE (LED 45) and WAVE (46) show the type and the wave by brightness
+ *   (32/48 and 4/8/12/16), so they keep small steps of their own;
+ *   the animation the writer adds (+0x98 / +0x9A, up to +16) is the
+ *   playhead and the tempo blink of PAGE A: it rises to the preset's high
+ *   level, or darkens a bright LED's blink in proportion.
+ * Presets {dim, normal, bright, high}: 1 everything at the lowest step the
+ * HT16D35A has, 2..4 brighter with the three classes apart, 5 the stock's
+ * own levels.  TEMPO+FOLLOW steps through them until the next power-on. */
 namespace {
 constexpr unsigned kFollow = 1, kTempo = 25, kFunc = 26;
-void led_white_step()
+struct LedPreset { float dim, normal, bright, high; };
+constexpr LedPreset kLedPresets[4] = {{1, 1, 1, 4}, {1, 2, 3, 8}, {2, 4, 6, 16}, {3, 8, 12, 32}};
+constexpr unsigned kLedStock = 5;
+
+unsigned led_level()
 {
-    volatile uint32_t &level = diag(D_LED_WHITE);
-    const uint32_t now = level ? level : np_led_white;
-    level = now < 32u ? 32u : now < 64u ? 64u : 16u;
-    auto *drv = reinterpret_cast<volatile uint8_t *>(0x2000190Cu + 0x94u + 3u);
-    for (unsigned i = 24; i <= 46; ++i)
-        if (i <= 40 || i >= 45)
-            drv[20u * i] = 1u;
+    const uint32_t l = diag(D_LED_LEVEL);
+    return l ? l : np_led_level;
 }
+
+/* the writer only sends an LED whose request changed: mark all 70 */
+void led_level_step()
+{
+    const unsigned now = led_level();
+    diag(D_LED_LEVEL) = now >= kLedStock ? 1u : now + 1u;
+    auto *drv = reinterpret_cast<volatile uint8_t *>(0x2000190Cu + 0x94u + 3u);
+    for (unsigned i = 0; i < 70u; ++i)
+        drv[20u * i] = 1u;
+}
+}
+
+extern "C" float np_led_target(const uint8_t *entry, unsigned index, float t)
+{
+    const unsigned level = led_level();
+    if (level < 1u || level > 4u)
+        return t;
+    const LedPreset &p = kLedPresets[level - 1u];
+    const auto *f = reinterpret_cast<const volatile int8_t *>(entry + 0x94);
+    const int s = f[0] + f[1] + f[2];        /* base + pulse + overlay  */
+    const float a = t - static_cast<float>(s); /* the writer's animation */
+    float l;
+    if (s <= 0) {
+        l = 0.0f;
+    } else if (index == 46u) {                /* WAVE: 4/8/12/16 -> 1..4 */
+        int step = s / 4;
+        step = step < 1 ? 1 : step > 4 ? 4 : step;
+        l = static_cast<float>(step) * (p.normal > 4.0f ? p.normal * 0.25f : 1.0f);
+    } else if (index == 45u) {                /* TYPE: 16/32/48 -> 1/2/3 */
+        const float n = p.normal > 3.0f ? p.normal : 3.0f;
+        l = __builtin_rintf(static_cast<float>(s) * n * (1.0f / 48.0f));
+        if (l < 1.0f)
+            l = 1.0f;
+    } else if (s < 8) {
+        l = p.dim;
+    } else if (s < 24) {
+        l = p.normal;
+    } else {
+        l = p.bright;
+    }
+    if (a > 0.0f) {
+        const float h = a * (1.0f / 16.0f) * p.high;
+        if (h > l)
+            l = h;
+    } else if (a < 0.0f) {
+        l *= 1.0f + a * (1.0f / 16.0f);
+        if (l < 0.0f)
+            l = 0.0f;
+    }
+    return l;
 }
 
 extern "C" void np_ui_switch(void *ui, void **event)
 {
     auto *panel = static_cast<Byte *>(ui);
     unsigned library = 0;   // SL: page + 1, and the SEQ key from bit 8
-    bool led_step = false;  // WL: this press is TEMPO+FOLLOW
+    bool led_step = false;  // LV: this press is TEMPO+FOLLOW
     // The dispatcher selected UiEvent<SwitchEventData>. Leave malformed
     // or other event types to the original RTTI/error/ownership path.
     if (event != nullptr && *event != nullptr &&
@@ -188,7 +247,7 @@ extern "C" void np_ui_switch(void *ui, void **event)
                         library = (page + 1) | (key - 4) << 8;
                         break;
                     }
-            // WL: FOLLOW pressed with TEMPO held (not FUNC: TEMPO+FUNC+
+            // LV: FOLLOW pressed with TEMPO held (not FUNC: TEMPO+FUNC+
             // FOLLOW is the stock pitchbend randomizer)
             if (kind == 0 && key == kFollow && (state()[kTempo] & kPressed) &&
                 !(state()[kFunc] & kPressed))
@@ -204,13 +263,13 @@ extern "C" void np_ui_switch(void *ui, void **event)
         }
     }
     // Keep RTTI, maps, modifier updates and the original event destructor.
-    // The stock sees an SL or WL press in mode 0, which has no actions.
+    // The stock sees an SL or LV press in mode 0, which has no actions.
     const uint8_t mode = panel[0x84];
     if (library || led_step) panel[0x84] = 0;
     np_ui_stock_switch(ui, event);
     if (led_step) {
         panel[0x84] = mode;
-        led_white_step();
+        led_level_step();
         np_ui_consume(ui, kFollow);     // and its release toggles no FOLLOW
     }
     if (library) {
