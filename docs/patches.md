@@ -1103,6 +1103,51 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
+## WL: the white LEDs, dimmer (p62 — 2026-11-11)
+
+The white LEDs are FOLLOW (LED 24), SEQ 1–16 (25..40), TYPE (45) and WAVE
+(46).  In a dark room they are much brighter than the coloured ones, and
+FOLLOW sits at 63 of 63 while it is on.  The indices were read off sysemu:
+each key was tapped and the 70 requested levels diffed (driver `0x2000190C`,
+entry `+0x94 + 20 i`).
+
+- **Where the level goes out.** The writer `0x08109FD0` sends one LED per
+  SysTick as `80 <address> <level>`.  It clamps the smoothed request to
+  0..63 and stores it at `+0x92` for the frame (`0x0810A0D0`).  It decides
+  "converged" from the unclamped value separately.
+- **The fix.** That store goes through `np_led_scale`, which scales the
+  white LEDs' level by N/64 (a lit LED stays at least 1) and leaves every
+  other LED alone.  The writer's bookkeeping is unchanged.
+- **How dark it can go.** TYPE and WAVE show the type and the wave by
+  brightness: TYPE 32/48, WAVE 4/8/12/16.  At the default 16/64 they send
+  8/12 and 1/2/3/4, still apart; below that WAVE's steps merge.  So 25 % is
+  the floor for this method.  Darker would need the HT16D35A's global
+  brightness, which the init sends as `37 3F` (`0x08109B1A`), and that dims
+  the coloured LEDs too.
+- **TEMPO+FOLLOW.** It steps the scale 25 → 50 → 100 % (`D_LED_WHITE`,
+  `0x13F4`), back to the build's default at every power-on.  The press runs
+  the stock in mode 0 and consumes the key, so FOLLOW is not toggled (the
+  stock's TEMPO+FOLLOW is a plain FOLLOW toggle).  The white LEDs are marked
+  dirty so the new scale shows at once.  TEMPO+FUNC+FOLLOW, the pitchbend
+  randomizer, is unchanged.
+- **Build option.** `--white-led PERCENT` sets the default (25).
+  `--white-led 100` starts at the stock levels; the scaler then sends them
+  unchanged.
+
+`tests/test_led_white.py` (9 checks) reads the SPI frames.
+- Control: the stock sends FOLLOW 62 and a SEQ note 15.  Its fade settles
+  one short of 63 and 16, which M2 fixes.
+- Default: FOLLOW 15, the SEQ note 4, TYPE 8/12, WAVE 1/2/3/4.  PAGE A and
+  the mini keyboard go out as asked.
+- TEMPO+FOLLOW: 31, 63, back to 15, with no FOLLOW toggle and no event.
+  FOLLOW alone still toggles.
+- TEMPO+FUNC+FOLLOW leaves the scale alone.
+
+The tests boot fresh: a restored snapshot leaves the patched writer waiting
+for an SPI end-of-transfer that the snapshot does not carry.
+`test_seq_led`, `test_led_fade`, `test_ui_chord`, `test_scale_library`,
+`test_spi_p6`, static and bootloader pass.  Image 522,752 bytes.
+
 ## R7: generator ranges +60 % (p61 — 2026-10-15)
 
 `Gen::range` widens every drawn range by three tenths of its width on each

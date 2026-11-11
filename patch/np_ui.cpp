@@ -141,11 +141,31 @@ extern "C" void np_ui_begin_unlink(void *ui, unsigned)
 }
 
 extern "C" void np_scale_library(unsigned page, unsigned seq);
+extern "C" const uint32_t np_led_white;
+
+/* WL (p62): TEMPO+FOLLOW steps the white LEDs (np_led_scale) through 25,
+ * 50 and 100 % (16, 32, 64 of 64).  The writer only sends an LED whose
+ * request changed, so the white ones are marked dirty to show the new
+ * scale at once (driver 0x2000190C, entry +0x94 + 20 i, dirty at +3). */
+namespace {
+constexpr unsigned kFollow = 1, kTempo = 25, kFunc = 26;
+void led_white_step()
+{
+    volatile uint32_t &level = diag(D_LED_WHITE);
+    const uint32_t now = level ? level : np_led_white;
+    level = now < 32u ? 32u : now < 64u ? 64u : 16u;
+    auto *drv = reinterpret_cast<volatile uint8_t *>(0x2000190Cu + 0x94u + 3u);
+    for (unsigned i = 24; i <= 46; ++i)
+        if (i <= 40 || i >= 45)
+            drv[20u * i] = 1u;
+}
+}
 
 extern "C" void np_ui_switch(void *ui, void **event)
 {
     auto *panel = static_cast<Byte *>(ui);
     unsigned library = 0;   // SL: page + 1, and the SEQ key from bit 8
+    bool led_step = false;  // WL: this press is TEMPO+FOLLOW
     // The dispatcher selected UiEvent<SwitchEventData>. Leave malformed
     // or other event types to the original RTTI/error/ownership path.
     if (event != nullptr && *event != nullptr &&
@@ -168,6 +188,11 @@ extern "C" void np_ui_switch(void *ui, void **event)
                         library = (page + 1) | (key - 4) << 8;
                         break;
                     }
+            // WL: FOLLOW pressed with TEMPO held (not FUNC: TEMPO+FUNC+
+            // FOLLOW is the stock pitchbend randomizer)
+            if (kind == 0 && key == kFollow && (state()[kTempo] & kPressed) &&
+                !(state()[kFunc] & kPressed))
+                led_step = true;
             if (data[4] == 0 && (key == 2 || key == 3) &&
                 kind == 2 && panel[kMode] == 5) {
                 // Unlike the stock exit's toggle, this is idempotent.
@@ -179,8 +204,15 @@ extern "C" void np_ui_switch(void *ui, void **event)
         }
     }
     // Keep RTTI, maps, modifier updates and the original event destructor.
-    if (library) panel[0x84] = 0;
+    // The stock sees an SL or WL press in mode 0, which has no actions.
+    const uint8_t mode = panel[0x84];
+    if (library || led_step) panel[0x84] = 0;
     np_ui_stock_switch(ui, event);
+    if (led_step) {
+        panel[0x84] = mode;
+        led_white_step();
+        np_ui_consume(ui, kFollow);     // and its release toggles no FOLLOW
+    }
     if (library) {
         panel[0x84] = 3;
         np_scale_library((library & 0xFF) - 1, library >> 8);

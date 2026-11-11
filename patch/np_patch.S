@@ -362,6 +362,10 @@ np_choke_samples:
     .word   np_boot_load                 /* +0x1E8 PB power-on load of slot 0  */
     .word   np_project_fail              /* +0x1EC ...its checks' error screen */
     .word   np_rotate_guard              /* +0x1F0 RG rotate inside the buckets */
+    .global np_led_white
+np_led_white:
+    .word   16                           /* +0x1F4 WL white LEDs, /64, patch.py */
+    .word   np_led_scale                 /* +0x1F8 ...applied as each is sent  */
 
 /* ------------------------------------------------------------------ */
 /* Replaces "bl SystemInit" in Reset_Handler.  This is the first       */
@@ -2407,6 +2411,45 @@ np_rotate_guard:
     movt    r12, #:upper16:(0x081583AC | 1)
     bx      r12
 1:  bx      lr
+
+/* WL: the white LEDs, dimmer.  The writer 0x08109FD0 sends one LED per  */
+/* SysTick as `80 <address> <level>`, the level (0..63, linear PWM) the   */
+/* smoothed request it has just clamped; it stores it at +0x92 for the    */
+/* frame (0x0810A0D0) and compares the unclamped value with the target    */
+/* separately, so scaling the stored byte changes what the HT16D35A shows */
+/* and nothing of the writer's bookkeeping.  White: FOLLOW (LED 24), SEQ  */
+/* 1-16 (25..40), TYPE (45), WAVE (46).  Level x scale/64, a lit LED at   */
+/* least 1: at the default 16/64 TYPE's 32/48 and WAVE's 4/8/12/16 (they  */
+/* show the type and wave by brightness) stay apart.  The scale is        */
+/* D_LED_WHITE, which TEMPO+FOLLOW cycles (np_ui.cpp), else np_led_white. */
+/* Entry r1 = level, r2 = LED index, r4 = driver; r0, r2, r3 and the FP   */
+/* registers are live in the writer.                                      */
+    .thumb_func
+    .align 2
+    .global np_led_scale
+np_led_scale:                    /* for `strb.w r1,[r4,#0x92]` at 0x0810A0D0 */
+    cbz     r1, 2f               /* off stays off                           */
+    cmp     r2, #24
+    blo     2f
+    cmp     r2, #40
+    bls     1f
+    cmp     r2, #45
+    beq     1f
+    cmp     r2, #46
+    bne     2f
+1:  ldr     r12, =(DIAG + D_LED_WHITE)
+    ldr     r12, [r12]
+    cmp     r12, #0
+    bne     3f
+    ldr     r12, =np_led_white
+    ldr     r12, [r12]
+3:  mul     r1, r1, r12
+    lsrs    r1, r1, #6
+    it      eq
+    moveq   r1, #1
+2:  strb    r1, [r4, #0x92]
+    bx      lr
+    .ltorg
 
     .thumb_func
     .align 2

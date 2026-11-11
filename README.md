@@ -109,6 +109,10 @@ The instrument list is in [docs/instruments.md](docs/instruments.md).
   step 1, like a pattern change.
 - **Dimmer "dim" SEQ LED state,** so dim and bright steps are easy to tell
   apart.
+- **Dimmer white LEDs.** FOLLOW, SEQ 1–16, TYPE and WAVE start at 25 % of
+  the stock brightness; the coloured LEDs are unchanged. TEMPO+FOLLOW steps
+  them through 25, 50 and 100 % until power-off. `--white-led` sets the
+  default.
 
 ---
 
@@ -366,7 +370,7 @@ docs/
   write outside its object. On the unit that is a fault, which the fault
   handler turns into a reset. An unknown event id in that SysEx aborts,
   and the watchdog resets the unit.
-- The image is close to the bootloader's 512 KiB limit. About 1.8 KiB is
+- The image is close to the bootloader's 512 KiB limit. About 1.5 KiB is
   left.
 - Analog behaviour (filter, drive, levels) differs from the bench's digital
   model. Instrument levels were set from the model.

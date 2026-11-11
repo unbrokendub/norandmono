@@ -259,7 +259,8 @@ class Header:
          self.nm_key_release, self.clear_match, self.load_request,
          self.load_done, self.proj_service,
          self.save_gate, self.boot_load,
-         self.project_fail, self.rotate_guard) = struct.unpack_from("<25I", blob, 0x190)
+         self.project_fail, self.rotate_guard, self.led_white,
+         self.led_scale) = struct.unpack_from("<27I", blob, 0x190)
 
     OFF_FLAGS = 0x05
     OFF_WDG_PR = 0x06
@@ -698,6 +699,18 @@ def build(args):
             poke(site, thumb_bl(site, 0x0814FA54),
                  thumb_bl(site, hdr.project_fail & ~1),
                  "project check 0x%02X -> noted at power-on (PB)" % code)
+
+    # ---- WL: the white LEDs, dimmer -------------------------------------
+    # FOLLOW, SEQ 1-16, TYPE and WAVE are white and light a dark room: the
+    # level the LED writer stores for its frame is scaled for them (x N/64,
+    # a lit one at least 1); TEMPO+FOLLOW steps the scale through 25, 50 and
+    # 100 % until the next power-on.  --white-led 100 starts at the stock
+    # levels (64/64 sends them unchanged).
+    white = max(1, min(64, int(round(args.white_led * 64 / 100.0))))
+    struct.pack_into("<I", image, blob_off + 0x1F4, white)
+    poke(0x0810A0D0, bytes.fromhex("84f89210"),
+         thumb_bl(0x0810A0D0, hdr.led_scale & ~1),
+         "LED writer frame level -> white LEDs scaled to %d/64 (WL)" % white)
 
     # ---- RG: a pattern rotate stays inside the step buckets ------------
     # FUNC+UP/DOWN on a pattern of length 0 asked 0x081583AC for the range
@@ -1464,6 +1477,9 @@ def main():
                    help="DELETE+RECORD also resets mod note 0 (layer 1: mod note 1) (stock)")
     b.add_argument("--no-journal-fix", dest="journal_fix", action="store_false", default=True,
                    help="a project slot cut short by a power loss hangs its load, at power-on for slot 0 (stock)")
+    b.add_argument("--white-led", type=float, default=25.0, metavar="PERCENT",
+                   help="white LEDs (FOLLOW, SEQ, TYPE, WAVE) at this %% of the stock level "
+                        "(default 25; below 25 TYPE/WAVE brightness steps start to merge; 100 = stock levels)")
     b.add_argument("--no-rotate-guard", dest="rotate_guard", action="store_false", default=True,
                    help="FUNC+UP/DOWN on a pattern of length 0 corrupts memory (stock)")
     b.add_argument("--no-boot-fallback", dest="boot_fallback", action="store_false", default=True,
