@@ -6,7 +6,7 @@ SYX_BL  := mono_secondary_bootloader.syx
 
 SRC     := src/norand/lzss.c src/norand/midi7.c src/norand/sysex_rx.c
 
-.PHONY: all extract analyse test patch patch-dsp-ab test-patch test-patch-static test-ui clean
+.PHONY: all extract analyse test patch patch-dsp-ab test-patch test-patch-static test-ui test-flash clean
 
 all: extract analyse test
 
@@ -89,6 +89,12 @@ test-patch: build/venv/bin/python build/mono_V2.2.0r-patched.syx
 	build/venv/bin/python tests/test_rotate_guard.py
 	build/venv/bin/python tests/test_led_level.py
 	build/venv/bin/python tests/test_bootloader_accepts.py
+	build/venv/bin/python tests/test_bootloader_usb_rx.py
+	build/venv/bin/python tests/test_bootloader_usb_setup.py
+
+## tools/flash.py through the real CoreMIDI to a virtual port (macOS, no hardware)
+test-flash: build/mono_V2.2.0r-patched.syx
+	/usr/bin/python3 tests/test_flash_coremidi.py
 
 test-ui: build/venv/bin/python build/mono_V2.2.0r-patched.syx
 	build/venv/bin/python tests/probe_ui_chord.py

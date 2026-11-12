@@ -295,8 +295,45 @@ PC sampler and heartbeats as MIDI CCs on channel 16. Decode them with
 1. Hold **TEMPO + FUNC** and power the unit on. It enters the bootloader.
    (The manual's PATTERN + RUN is wrong for this bootloader.)
 2. Connect over **USB**; DIN does not work for updates.
-3. In a SysEx utility, set a **1 ms delay between messages** and send
-   `build/mono_V2.2.0r-patched.syx`. Progress shows on the SEQ LEDs.
+3. Send the file. Progress shows on the SEQ LEDs, then the unit restarts.
+
+   **Windows** works. Use a SysEx utility such as MIDI-OX with a delay
+   between messages (1 ms or more).
+
+   **macOS does not work yet.** On macOS 15 the stock bootloader stops
+   part-way through the update. The bootloader's USB class has no Setup
+   handler, and its USB stack calls that null pointer on any interface
+   request or endpoint HALT request, which faults the CPU. In both attempts
+   on a Mac, a control request to the unit was left pending at the moment
+   it hung. Apple's own USB/MIDI services hold the device open, so the
+   request most likely comes from macOS itself. Windows does not send
+   these requests during a transfer.
+
+   `tools/flash.py` is the macOS sender written for this. It paces the
+   messages, watches the kernel's USB log and waits for the unit to
+   restart. Its `--check` option validates a .syx on any OS and refuses
+   anything the bootloader would choke on: a broken container, missing
+   messages, or an image over 512 KiB.
+
+   ```bash
+   python3 tools/flash.py --check build/mono_V2.2.0r-patched.syx
+   ```
+
+Rules for any host:
+
+- **Quit DAWs and editors first.** The bootloader garbles the update on a
+  MIDI clock byte or a long SysEx from another app on the same port.
+- **Don't burst.** More than about 380 bytes inside one millisecond
+  overflows the bootloader's receive ring without any error.
+- **If a send is interrupted or fails, power-cycle into the bootloader
+  before sending again.** It keeps its write position until then.
+
+[docs/protocol.md](docs/protocol.md#8-the-usb-receive-path) has the details.
+Nothing is erased before the last message arrives. A send that stalls or
+stops earlier leaves the current firmware in place. A garbled stream that
+does complete erases the application, so the unit then needs a good file.
+The bootloader is never touched, so TEMPO + FUNC at power-on always gets
+back into it.
 
 To go back to stock, flash the official `mono_V2.2.0r.syx` the same way.
 
@@ -312,6 +349,9 @@ ordinary custom scale.
 ```bash
 make test-patch-static   # image, branch targets, SysEx round trip (no emulator)
 build/venv/bin/python tests/test_bootloader_accepts.py   # the bootloader takes the image
+build/venv/bin/python tests/test_bootloader_usb_rx.py    # its USB receive path, paced and not
+build/venv/bin/python tests/test_bootloader_usb_setup.py # the control requests that crash it
+make test-flash          # tools/flash.py through CoreMIDI to a virtual port (macOS)
 make test-patch          # every feature under the whole-firmware emulator (slow)
 ```
 
@@ -339,6 +379,7 @@ patch/            the injected code
   np_mnrand.cpp     the instrument generator, kits, styles, scale library
 tools/
   patch.py          applies the patches and builds the .syx
+  flash.py          checks a .syx and sends it over USB from macOS (CoreMIDI)
   norand_syx.py     SysEx container and LZSS codec
   bench/            voice render bench
   diagmidi.py       decoder for the telemetry build

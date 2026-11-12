@@ -77,6 +77,9 @@ void norand_sysex_rx_byte(norand_sysex_rx *rx, uint8_t byte,
             return;
         }
         pos = rx->hdr_pos;
+        /* Not in the stock: 0x08026B48 stores past the 10-byte header with
+         * no bound, so a long foreign SysEx overwrites the write offset and
+         * the buffer pointer that follow it (docs/protocol.md, section 8). */
         if (pos >= NORAND_SYSEX_HDR_LEN)
             return;
         rx->hdr[pos] = byte;

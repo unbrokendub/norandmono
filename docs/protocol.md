@@ -176,3 +176,111 @@ python3 tools/norand_syx.py pack   build/firmware.bin patched.syx firmware
 The bundled compressor is slightly denser than the stock one (262608 vs
 280182 bytes for the same image), so a repacked stock image is smaller than
 the original file and still decodes identically.
+
+`tools/flash.py` checks a firmware .syx the same way and sends it from
+macOS (section 8).
+
+## 8. The USB receive path
+
+The update arrives on the bulk OUT endpoint 0x01 (64 bytes, descriptor at
+`0x08027780`). On its way to the parser in section 3 nothing checks it.
+
+| step | where | what it does |
+|---|---|---|
+| USB OUT callback | `0x080250D4` | splits the transfer into 4-byte USB-MIDI event packets |
+| ring write | `0x08026DD0` | stores each packet in a 128-entry ring at `0x20001AD0` (indexes `+0x204` write, `+0x200` read); **no full check** |
+| main loop | `0x0802698C` | waits for the SysTick flag `0x200016C0` (1 kHz) and then drains the ring once: **one drain per millisecond** |
+| packet consumer | `0x08026C80` | ignores the CIN byte and feeds all three data bytes, using only F0/F7 to tell where a message starts and ends |
+| SysEx parser | `0x08026B00` | header match, 7-bit groups into the AXI SRAM buffer, flash on the last index |
+
+What follows:
+
+- **Overflow.** More than 127 packets between two drains laps the ring.
+  The lost packets go unnoticed. A 123-byte firmware message is 41
+  packets, so three messages inside one millisecond fit and four do not.
+  That is about 380 bytes per millisecond, under half of what full-speed
+  USB can carry.
+- **Foreign traffic.** A real-time packet such as `0F F8 00 00` (clock)
+  inside a message feeds its two padding zeros as data. A long SysEx that
+  fails the header match keeps writing header bytes: the header index at
+  `+0x54C` has no bound (`0x08026B48`), and bytes 20..27 land on the write
+  offset (`+0x540`) and the buffer pointer (`+0x544`). The next update then
+  writes wherever those point. Short SysEx (a 6-byte device inquiry) and
+  real-time packets between messages are harmless.
+- **No integrity check.** Message indexes are parsed but never compared
+  with a running count, and the payload carries no checksum. A garbled
+  stream either stalls (the last index never arrives), faults, or reaches
+  the flash routine, which erases bank 2 before it parses anything.
+- **State survives a failed send.** The write offset and the announced
+  total are cleared only at bootloader entry (`0x08026E10`). A second send
+  into the same session appends to the first. Power-cycle into the
+  bootloader before resending.
+
+`src/norand/sysex_rx.c` bounds the header index; the stock code does not.
+
+### 8.1 Control requests that crash it
+
+The MIDI class table at `0x080277E8` holds Init, DeInit, a **null Setup**,
+DataIn and DataOut. The device stack is an old ST USB device library, and
+it calls `pClass->Setup` without a NULL check:
+
+| request | handler | result |
+|---|---|---|
+| any request to interface 0 or 1 once configured (standard, class or vendor: GET_STATUS, GET/SET_INTERFACE, GET_CUR...) | `0x08024D30` | `blx 0` |
+| SET_FEATURE / CLEAR_FEATURE(ENDPOINT_HALT) on endpoint 0x01 or 0x81 | `0x08024D6C` | `blx 0` |
+| class request to an endpoint | `0x08024D6C` | `blx 0` |
+| device requests (GET_DESCRIPTOR, GET_STATUS, SET_CONFIGURATION...) | `0x08024A9C` | fine |
+
+`blx` to address 0 on a Cortex-M faults (INVSTATE) into the HardFault loop
+at `0x0802534C`. The USB interrupt never runs again, the OUT endpoint is
+never re-armed, and the control request never completes.
+`tests/test_bootloader_usb_setup.py` runs the setup stage `0x08024864` on
+each request.
+
+On macOS 15.8 the update hung part-way twice: the SEQ LEDs stopped at 2/16
+with 8 ms pacing and at 3/16 with 30 ms pacing. Both times the kernel log
+showed, when the unit was switched off, a pending OUT write, a pending IN
+read and a **pending control request on endpoint 0**. Earlier power-offs of
+the running application left only the IN read. No USB error was logged
+during either send.
+
+The device was held open by Apple services, MIDIServer in one session and
+usbaudiod in the other, so third-party software could not have sent the
+request. It most likely comes from macOS's own USB/MIDI stack. Which
+request it was would take a USB capture, and on macOS that needs SIP
+disabled.
+
+Windows sends none of these requests during a transfer, which is why
+updates work there.
+
+Two other macOS quirks were checked in emulation and ruled out:
+
+- CoreMIDI's single-byte "escape" packets (`0F xx 00 00`) garble this
+  bootloader's buffer but do not stall it: all 16 LEDs light, then the
+  image is bad.
+- CoreMIDI's known drop/duplicate of 512-byte blocks needs a backlog of
+  large SysEx, which paced 123-byte messages never build.
+
+On Windows, an MME MIDI port belongs to one application at a time and the
+usual utilities pause between messages, so the data-path hazards above
+rarely show there. On macOS, CoreMIDI shares a port among all applications
+and sends as fast as the bus allows. `tools/flash.py` sends one message per
+`MIDISend`, at least `--gap` ms apart (default 15), and nothing else. That
+handles the data path but not the control requests in 8.1.
+
+The receive loop also drains a second ring (`+0x410`, parsed by
+`0x08026A10`) meant for DIN MIDI. The bootloader sets up no UART, though,
+so nothing ever fills it and DIN cannot interfere with an update. That is
+also why DIN does not work for updates.
+
+A bootloader that faults mid-transfer stops re-arming the OUT endpoint, and
+the host's write then stays pending. macOS logs nothing until the unit is
+switched off, at which point the pending request completes as
+`pipe stalled`. A successful update ends with the bootloader jumping to the
+application. The unit drops off USB and enumerates again (VID:PID
+1209:DF00, product "Mono"). `tools/flash.py` waits for that.
+
+`tests/test_bootloader_usb_rx.py` runs the stock code from the callback to
+the flash routine in Unicorn and checks the cases above.
+`tests/test_flash_coremidi.py` sends a file through the real CoreMIDI to a
+virtual port and checks the bytes and the spacing.
