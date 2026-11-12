@@ -1103,6 +1103,100 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
+## SY: a Syncussion-style instrument (p64 — 2026-11-12)
+
+Instrument 43, `syncussion`, follows one channel of the Pearl Syncussion
+SY-1. The reference is its 1980 service manual: the block diagram and the
+mode switching.
+
+**The SY-1 channel:**
+- Sources: two triangle VCOs, slightly asymmetric, and a transistor noise
+  source.
+- Filter: two one-pole low-passes in series, no resonance. TUNE, the
+  envelope (WIDTH), the sweep and the LFO all move its cutoff.
+- Amp envelope: decay only, exponential, 6 ms to 2.5 s. TUNE shortens it
+  as well.
+- Sweep: a one-shot exponential, up or down. It moves the pitch and the
+  filter together.
+- LFO: triangle or square, or its sample & hold, which takes one value per
+  trigger.
+- Modes:
+  - A: one VCO;
+  - B: VCO1 frequency-modulates VCO2;
+  - C: both VCOs;
+  - D: both, with the pitch falling with the amp envelope (the Simmons tom);
+  - E: FM with a saw;
+  - F: noise alone.
+
+**On Mono:**
+- **Mode weights:** A 3, B 2, C 1, D 2, E 1, F 1 out of 10.
+- **Oscillators:** the waves are triangles ±0x0C00, so slightly
+  asymmetric. VCO2 is detuned ±50 cents and sits an interval of −12..+24
+  st from VCO1.
+- **FM (B, E):** through the TZFM. VCO1 is the silent modulator; VCO2 is
+  the carrier and plays the drawn pitch.
+- **Filter:** COLOR low-pass, RESO 0. The cutoff is 0–30 st over the
+  sounding pitch (`(st + 69 + k) × 256`, independent of the played note),
+  +24 more for F. ENV AMOUNT 0..+36 cutoff semitones plays WIDTH.
+- **Amp:** decay-only `hit()`. The decay is drawn from six steps between
+  40 ms and 1.4 s, two steps shorter when the pitch is more than 6 st above
+  the played note.
+- **Sweep:**
+  - One X-Env on VCO1's pitch: attack 0, decay 15–900 ms.
+  - Amount: down 3..48 st, or up 3..24 st (30 %, only from pitches no
+    lower than an octave below the note). In D the X-Env decay equals the
+    amp decay and the amount is 3..14 st down.
+  - The same X-Env goes onto VCO2's pitch, and onto the cutoff converted
+    to cutoff units (×121/128, the cube root of 126/149). The VCOs' ratio
+    and the filter's place over the pitch therefore hold through the
+    sweep. An audio-rate X-Mod modulator does not follow an X-Env sweep,
+    which is why the FM goes through the TZFM.
+- **MOD:**
+  - 30 %: a free LFO on the pitch, 2–10 Hz, 1–12 st, square (a trill) or
+    triangle.
+  - 20 %: a synced 1/16 sample & hold, 2–12 st, so a new pitch every step.
+  - It is copied to VCO2 and the cutoff the same way as the sweep.
+- **F:** VCO1 silent, VCO2's pitch noised (audio-rate S&H). The sweep then
+  moves the filter.
+
+**What it cannot do like the SY-1:**
+- play two channels at once (Mono is monophonic);
+- produce true noise or the two-pole filter's exact colour;
+- respond to velocity.
+
+**Access:**
+- **C# + F#** (black-key bits 5) picks `G_SYN = 1024` alone. In normal
+  mode, a second black key with C# or F# picks it the same way.
+- It also comes up in free draws (weight 4).
+- Style weights: techno 2, dub 4, acid 1, electro 4, ambient 1. These are
+  the high nibble of each style's last weight byte, so the table size is
+  unchanged.
+
+`D_MNRAND_LAST` keeps only the groups' low 8 bits, so C#+F# shows as 0
+there.
+
+**Level:** 56/64.
+- At 50, 15 draws (BS.1770 momentary maximum on the bench) gave a median
+  of −29.0 and an energy mean of −25.2. Nine kicks at their 85 gave −29.1
+  and −24.2.
+- The p51 target is the midpoint 1.6 dB under the kick's energy mean, so
+  +1 dB. That makes 56.
+- The spread is wide, as with the kick. The quietest draws are 30 ms low
+  hits, which a 400 ms window rates low.
+
+**Tests:**
+- `test_modnote_random.py` has the instrument, its group and the C#+F#
+  pair. Its check: one sweep, equal on both VCOs and scaled on the cutoff;
+  RESO 0; low-pass; no sustain.
+- A sysemu smoke passes: 16 forced draws (all modes), and C#+F# + a white
+  key six times, always `syncussion`.
+- Bootloader and static pass.
+- The smoke covers the full sets too: G# on page 4 (electro) put it on 3
+  of 40 keys and A# on 1. A C# kit leaves it out. Nothing faulted.
+- Image 523,776 bytes (512 under the cap).
+
+---
+
 ## LV: the LEDs levelled (p63 — 2026-11-11; replaces p62's WL)
 
 The stock asks each LED for its own level: FOLLOW 63 when on, TYPE 32/48,

@@ -58,21 +58,23 @@ NAMES = ('kick snare clap hat-closed hat-open tom perc bass acid lead pad pluck 
          'cymbal shaker drop fm-bass reese wobble growl sync-lead hoover phaser-pad '
          'gate fm-ep mallet bleeps riser siren drone '
          'metal am-bell talk wind crackle 808 '
-         'cowbell rim conga chord').split()
+         'cowbell rim conga chord syncussion').split()
 WEIGHT = (12, 9, 6, 9, 5, 5, 4, 9, 5, 4, 4, 5, 4, 4, 4, 5,
           4, 4, 3, 6, 4, 5, 4, 4, 3, 3, 4, 4, 4, 4, 3, 3, 3,
           4, 3, 3, 2, 2, 5,
-          3, 4, 4, 4)                                  # p54: cowbell rim conga chord; perc 6 -> 4
+          3, 4, 4, 4,                                  # p54: cowbell rim conga chord; perc 6 -> 4
+          4)                                           # p64: syncussion
 # R2 (p49 layout): C# 1 kick, C#+D# 2 hats/clap/snare, D# 4 toms
 # and the other drums, F# 8 deep basses, F#+G# 16 the other basses, G# 32
 # tonal, A# 64 zaps/blips/glitch, F#+A# 128 everything else
 GROUP = dict(zip(NAMES, (1, 2, 2, 2, 2, 4, 4, 8, 16, 32, 32, 288, 288, 64, 288, 64,
                          4, 4, 4, 520, 8, 16, 16, 32, 32, 32, 32, 288, 288, 64, 128, 128, 32,
                          4, 288, 32, 128, 128, 8,
-                         4, 4, 4, 288)))      # p51: 256 = G#+A#, plucked/struck tonal; p52: 512 = D#+F#, FM bass
+                         4, 4, 4, 288,
+                         1024)))      # p51: 256 = G#+A#, plucked/struck tonal; p52: 512 = D#+F#, FM bass; p64: 1024 = C#+F#, Syncussion
 BLACK = {35: 1, 37: 4, 40: 8, 42: 32, 44: 64}                 # one key
 COMBO = {frozenset((35, 37)): 2, frozenset((40, 42)): 16, frozenset((40, 44)): 128, frozenset((42, 44)): 256,
-         frozenset((37, 40)): 512}
+         frozenset((37, 40)): 512, frozenset((35, 40)): 1024}
 
 
 def black_want(blacks):
@@ -334,6 +336,13 @@ def behaves_p39(name, get, t, base1, base2):
     if name == '808':
         return ('pitch %.0f, a drop, holds %.2f' % (base1, amp(280)),
                 base1 in (36, 48) and get(0, 4) > 0x8000 and amp(280) >= 0.18)
+    if name == 'syncussion':
+        # one sweep on both VCOs and (in cutoff units) on the cutoff; a
+        # low-pass without resonance; decay only
+        a1, a2, ac = get(0, 4), get(4, 4), get(9, 4)
+        tracked = a1 == a2 and abs((ac - 0x8000) - (a1 - 0x8000) * 121 // 128) <= 1
+        return ('sweep %+d raw on both VCOs, cutoff %+d, TZFM %04x' % (a1 - 0x8000, ac - 0x8000, get(8, 0)),
+                tracked and a1 != 0x8000 and get(10, 0) == 0 and get(11, 0) == 0x8000 and get(16, 0) == 0)
     return ('?', False)
 
 
@@ -448,7 +457,7 @@ def test_black_keys():
 
     key = 41
     note = r.index(key)
-    for blacks in ((35,), (35, 37), (37,), (40,), (40, 42), (42,), (44,), (40, 44), (42, 44), (37, 40), (37, 42)):
+    for blacks in ((35,), (35, 37), (37,), (40,), (40, 42), (42,), (44,), (40, 44), (42, 44), (37, 40), (37, 42), (35, 40)):
         want = black_want(blacks)
         got = []
         for _ in range(4):

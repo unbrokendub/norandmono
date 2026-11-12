@@ -1,6 +1,6 @@
 # Instruments
 
-The 43 instruments the mod-note generator builds, in catalogue order (the number is what
+The 44 instruments the mod-note generator builds, in catalogue order (the number is what
 `D_MNRAND_FORCE` and the tests use).  "Black keys" lists the held black key or pair that
 picks it; a set of keys that has no pair of its own picks the union of its single keys.
 
@@ -49,3 +49,4 @@ picks it; a set of keys that has no pair of its own picks the union of its singl
 | 40 | rim | rimshot, clave, wood block | 4 | D# |
 | 41 | conga | conga, bongo, timbale | 4 | D# |
 | 42 | chord | dub chord | 4 | G#, G#+A# |
+| 43 | syncussion | a Pearl Syncussion SY-1 channel: modes A–F, one sweep on both VCOs and the filter, LFO trill or S&H | 4 | C#+F# |

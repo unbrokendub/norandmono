@@ -65,7 +65,7 @@ flashing the official update the same way.
 ### The mod-note instrument generator
 
 In mod-note mode the stock TEMPO+FUNC+key randomized every knob
-independently. The generator builds a real instrument instead, from 43
+independently. The generator builds a real instrument instead, from 44
 recipes: kicks, snares, hats, toms, percussion, basses, acid, FM bass, leads,
 pads, plucks, bells, stabs, FX and more.
 
@@ -80,6 +80,14 @@ pads, plucks, bells, stabs, FX and more.
   tremolo, drive, colour/resonance FM at the note, and slow timbre drift.
 - **Pick the kind of sound** with the black keys: single keys and pairs
   select instrument groups (see the table below).
+- **Syncussion-style drums.** One recipe follows a channel of the Pearl
+  Syncussion SY-1 analog drum synth: triangle oscillators, a low-pass
+  without resonance that tracks the pitch, a decay-only envelope, and one
+  sweep that moves both oscillators and the filter together, down or up.
+  It covers the SY-1's modes: one oscillator, FM, two oscillators, a pitch
+  that falls with the envelope (Simmons-style toms), FM with a saw, and
+  noise. An LFO trill or a per-step sample & hold pitch is added
+  sometimes. C# + F# picks it alone.
 - **Kits.**
   - A drum kit over the page, sharing room, brightness, drive and the hats'
     metal.
@@ -222,6 +230,7 @@ Kits built after G# use its style. A# clears the style.
 | G# + A# | plucked and struck tonal |
 | A# | zaps, bleeps, glitch |
 | F# + A# | riser, siren, wind, crackle |
+| C# + F# | Syncussion-style drums and zaps |
 
 Any other combination picks the union of its keys' groups.
 

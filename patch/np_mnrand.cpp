@@ -1898,6 +1898,82 @@ void chord(Patch &p, Gen &g)
     p.base(VOLUME, 0xB000, 0xC800);
 }
 
+/* p64 SY: a channel of the Pearl Syncussion SY-1 (its 1980 service manual).
+ * Two triangle VCOs, a little lopsided, and a noise source; two one-pole
+ * low-passes in a row, no resonance, the cutoff riding the pitch; a
+ * decay-only exponential amp envelope, 6 ms to 2.5 s, shorter the higher it
+ * is tuned; a one-shot exponential sweep, down or up, that moves the pitch
+ * and the filter together; an LFO (triangle or square) or its sample & hold.
+ * Its modes: A one VCO, B VCO1 FMs VCO2, C both, D both with the pitch
+ * falling with the amp envelope (the Simmons tom), E FM with a saw, F noise
+ * alone.  Here one X-Env sweeps VCO1 and the same goes onto VCO2 and, in
+ * cutoff units, onto the cutoff, so the VCOs' ratio and the filter's place
+ * over the pitch hold through the sweep (an audio-rate X-Mod would not
+ * follow it); the LFO goes the same way.  B and E through the TZFM, VCO1
+ * the silent modulator; F VCO2's pitch noised. */
+void syncussion(Patch &p, Gen &g)
+{
+    enum { A, B, C, D, E, F };
+    static const uint8_t kMode[] = {A, A, A, B, B, C, D, D, E, F};
+    /* the amp decay, and for D the X-Env decay that falls with it */
+    static const uint16_t kDecay[][2] = {
+        {RAW(env(40)), RAW(xdec(40))}, {RAW(env(90)), RAW(xdec(90))}, {RAW(env(180)), RAW(xdec(180))},
+        {RAW(env(350)), RAW(xdec(350))}, {RAW(env(700)), RAW(xdec(700))}, {RAW(env(1400)), RAW(xdec(1400))},
+    };
+    const unsigned mode = g.pick(kMode);
+    const bool fm = mode == B || mode == E;
+    const int st = p.tone(-30, 18), iv = g.irange(-12, 24);
+    p.base(VCO1_TUNE, tune(st + (fm ? iv : 0)));
+    p.base(VCO2_TUNE, tune(st + (fm ? 0 : iv)));
+    p.bases(KBASES(VCO1_WAVE, RAW(kTri) - 0x0C00, RAW(kTri) + 0x0C00, VCO1_VOL, 0xA000, 0xD800,
+                   VCO2_FINE, RAW(cents(-50)), RAW(cents(50)), VCO2_WAVE, RAW(kTri) - 0x0C00, RAW(kTri) + 0x0C00,
+                   VCO2_VOL, 0xA000, 0xD800, RESO, 0, 0, COLOR, kLp, kLp, FENV, kFenv0, RAW(cuts(36)),
+                   VOLUME, 0xB000, 0xC800));
+    if (mode == A)
+        p.base(VCO2_VOL, 0);
+    if (fm || mode == F)
+        p.base(VCO1_VOL, 0);
+    if (fm)
+        p.base(TZFM, 0x3000, 0xC000);
+    if (mode == E)
+        p.base(VCO2_WAVE, RAW(kSaw) - 0x1800, RAW(kSaw));
+    /* the filter some way over the sounding pitch: (pitch + 12) - (note - 57) */
+    p.base(CUTOFF, unsigned((st + 69 + g.irange(0, 30) + (mode == F ? 24 : 0)) * 256));
+    unsigned d = g.below(6);
+    if (st > 6 && d > 2u)
+        d -= 2u;
+    p.hit(kDecay[d][0], kDecay[d][0] + 0x800u);
+    /* the sweep: D falls with the envelope, the others mostly down, now
+     * and then up (not from the low ones: it would start below hearing) */
+    unsigned d_lo = RAW(xdec(15)), d_hi = RAW(xdec(900)), a_lo = RAW(semis(3)), a_hi = RAW(semis(48));
+    if (mode == D) {
+        d_lo = d_hi = kDecay[d][1];
+        a_hi = RAW(semis(14));
+    } else if (st > -12 && g.chance(30)) {
+        a_lo = RAW(semis(-24));
+        a_hi = RAW(semis(-3));
+    }
+    p.xenv(VCO1_TUNE, 0, 0, d_lo, d_hi, a_lo, a_hi);
+    switch (g.below(10)) {
+    case 0: case 1: case 2:     /* the LFO: a trill (square) or a vibrato */
+        p.xmod(VCO1_TUNE, g.chance(60) ? W_SQUARE : W_TRI, T_LFO, g.range(RAW(lfo_hz(2)), RAW(lfo_hz(10))),
+               g.range(RAW(semis(1)), RAW(semis(12))));
+        break;
+    case 3: case 4:             /* its sample & hold: a new pitch every step */
+        p.xmod(VCO1_TUNE, W_SH, T_SYNCED, division(D_16), g.range(RAW(semis(2)), RAW(semis(12))));
+        break;
+    default:
+        break;
+    }
+    for (unsigned l = XMOD_AMT; l <= XMOD_TYPE; ++l) {
+        const unsigned v = p.v[VCO1_TUNE][l];
+        p.v[VCO2_TUNE][l] = uint16_t(v);
+        p.v[CUTOFF][l] = uint16_t(l == XMOD_AMT || l == XENV_AMT ? 0x8000 + (int(v) - 0x8000) * 121 / 128 : int(v));
+    }
+    if (mode == F)
+        p.noise(VCO2_TUNE, RAW(semis(40)), RAW(semis(110)));
+}
+
 /* ---- p42: spice ---------------------------------------------------------------
  * After a bass or tonal recipe, none to three of the knobs a player would
  * reach for next: an LFO or an X-Env on the cutoff, a TZFM bite, a drifting
@@ -2061,7 +2137,7 @@ void hat_open(Patch &p, Gen &g) { hat(p, g, true); }
  * EP, mallet, AM bell -- which G# keeps too; p52, D#+F#: FM basses only. */
 enum Group : uint16_t {
     G_KICK = 1, G_HATS = 2, G_DRUMS = 4, G_DEEP = 8, G_BASS = 16, G_TONAL = 32, G_ZAP = 64, G_OTHER = 128,
-    G_PLUCK = 256, G_FM = 512
+    G_PLUCK = 256, G_FM = 512, G_SYN = 1024
 };
 
 /* The order is the instrument's number (D_MNRAND_LAST, D_MNRAND_FORCE and
@@ -2091,6 +2167,8 @@ const Entry kCatalogue[] = {
     {wind, 2, 100, G_OTHER}, {crackle, 2, 49, G_OTHER}, {bass808, 5, 19, G_DEEP},
     /* p54 */
     {cowbell, 3, 100, G_DRUMS}, {rim, 4, 100, G_DRUMS}, {conga, 4, 49, G_DRUMS}, {chord, 4, 42, G_TONAL | G_PLUCK},
+    /* p64 */
+    {syncussion, 4, 56, G_SYN},
 };
 constexpr unsigned kInstruments = sizeof kCatalogue / sizeof kCatalogue[0];
 
@@ -2111,15 +2189,15 @@ struct Style {
 };
 const Style kStyle[] = {
     /* techno  */ {{-12, 0}, {-2, 6}, {0, 24},
-                  {0x3C, 0x96, 0x46, 0x65, 0x12, 0x21, 0x31, 0x35, 0x34, 0x51, 0x14, 0x12, 0x13, 0x03, 0x20, 0x02, 0x41, 0x01, 0x10, 0x21, 0x15, 0x04}},
+                  {0x3C, 0x96, 0x46, 0x65, 0x12, 0x21, 0x31, 0x35, 0x34, 0x51, 0x14, 0x12, 0x13, 0x03, 0x20, 0x02, 0x41, 0x01, 0x10, 0x21, 0x15, 0x24}},
     /* dub     */ {{4, 20}, {-10, -2}, {-16, 0},
-                  {0x38, 0x54, 0x25, 0x93, 0x10, 0x23, 0x11, 0x12, 0x42, 0x22, 0x23, 0x00, 0x30, 0x22, 0x12, 0x42, 0x13, 0x02, 0x33, 0x02, 0x26, 0x0C}},
+                  {0x38, 0x54, 0x25, 0x93, 0x10, 0x23, 0x11, 0x12, 0x42, 0x22, 0x23, 0x00, 0x30, 0x22, 0x12, 0x42, 0x13, 0x02, 0x33, 0x02, 0x26, 0x4C}},
     /* acid    */ {{-8, 4}, {0, 8}, {8, 28},
-                  {0x3C, 0x96, 0x35, 0x43, 0x2E, 0x21, 0x40, 0x23, 0x24, 0x21, 0x21, 0x24, 0x02, 0x02, 0x20, 0x12, 0x20, 0x10, 0x00, 0x21, 0x13, 0x01}},
+                  {0x3C, 0x96, 0x35, 0x43, 0x2E, 0x21, 0x40, 0x23, 0x24, 0x21, 0x21, 0x24, 0x02, 0x02, 0x20, 0x12, 0x20, 0x10, 0x00, 0x21, 0x13, 0x11}},
     /* electro */ {{-12, -2}, {2, 8}, {-4, 16},
-                  {0x8A, 0x96, 0x54, 0x44, 0x32, 0x21, 0x61, 0x32, 0x22, 0x52, 0x31, 0x41, 0x01, 0x11, 0x51, 0x11, 0x30, 0x51, 0x00, 0x68, 0x44, 0x01}},
+                  {0x8A, 0x96, 0x54, 0x44, 0x32, 0x21, 0x61, 0x32, 0x22, 0x52, 0x31, 0x41, 0x01, 0x11, 0x51, 0x11, 0x30, 0x51, 0x00, 0x68, 0x44, 0x41}},
     /* ambient */ {{8, 24}, {-6, 2}, {-16, -4},
-                  {0x02, 0x21, 0x12, 0x33, 0x30, 0x5A, 0x06, 0x21, 0x32, 0x11, 0x03, 0x10, 0x60, 0x52, 0x26, 0x03, 0x28, 0x15, 0x45, 0x00, 0x12, 0x04}},
+                  {0x02, 0x21, 0x12, 0x33, 0x30, 0x5A, 0x06, 0x21, 0x32, 0x11, 0x03, 0x10, 0x60, 0x52, 0x26, 0x03, 0x28, 0x15, 0x45, 0x00, 0x12, 0x14}},
 };
 constexpr unsigned kStyles = sizeof kStyle / sizeof kStyle[0];
 
@@ -2669,7 +2747,7 @@ volatile uint32_t &mark_word(unsigned note)
 const uint8_t kBlackKey[5] = {35, 37, 40, 42, 44};
 const uint16_t kCombo[][2] = {
     {1, G_KICK}, {3, G_HATS}, {2, G_DRUMS}, {4, G_DEEP}, {12, G_BASS}, {8, G_TONAL}, {16, G_ZAP}, {20, G_OTHER},
-    {24, G_PLUCK}, {6, G_FM},
+    {24, G_PLUCK}, {6, G_FM}, {5, G_SYN},
 };
 
 /* the black keys down (this one counts, whatever the UI has seen of it),
