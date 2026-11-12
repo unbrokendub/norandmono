@@ -26,6 +26,9 @@ sysemu captures (`80 <address> <level>`).
      few TEMPO presses the stock starts a tempo blink on them, which levels
      as "high", as PAGE A's does.)
   4. TEMPO+FUNC+FOLLOW leaves the preset alone.
+  5. LS (p65): in the settings screens (FUNC+PATTERN's length here) the
+     chosen PAGE and SEQ send 6x the dim level, the rest 1; leaving puts
+     them back, even PAGE A, whose request stays 16 throughout.
 
     build/venv/bin/python tests/test_led_level.py
 """
@@ -177,12 +180,41 @@ def randomizer():
           (after == before, len(m.events) > 0), (True, True))
 
 
+def settings():
+    print('5. settings screens (LS, p65): the choice stands out on SEQ and PAGE')
+    p = Panel(IMAGE)
+    m = p.m
+    pages = lambda s: [s[PAGE_A + i] for i in range(4)]
+    seqs = lambda s: [s[SEQ1 + i] for i in range(16)]
+    before = p.sent()[PAGE_A]
+    m.press(26); m.settle(30); m.tap(24); m.release(26); m.settle(80)       # FUNC+PATTERN: length
+    s = p.sent()
+    check('length screen: PAGE %s, SEQ 16 %d, others %s (asked %d / %d)'
+          % (pages(s), s[SEQ1 + 15], sorted(set(seqs(s)[:15])), p.want(PAGE_A), p.want(PAGE_A + 1)),
+          (before, pages(s), s[SEQ1 + 15], set(seqs(s)[:15])), (1, [6, 1, 1, 1], 6, {1}))
+    m.tap(23); m.settle(60); m.tap(5); m.settle(60)                        # PAGE D, SEQ 2: 50 steps
+    s = p.sent()
+    check('PAGE D, SEQ 2: PAGE %s, SEQ %s' % (pages(s), seqs(s)[:4]),
+          (pages(s), seqs(s)[1], set(seqs(s)[:1] + seqs(s)[2:])), ([1, 1, 1, 6], 6, {1}))
+    m.press(26); m.settle(30); m.tap(24); m.release(26); m.settle(80)       # in again: PAGE A asks 16 throughout
+    m.tap(26); m.settle(80)                                                  # FUNC leaves
+    s = p.sent()
+    check('left: mode %d, PAGE A %d (asks %d), every lit SEQ/PAGE 1'
+          % (p.uc.mem_read(0x2000DE54 + 0x84, 1)[0], s[PAGE_A], p.want(PAGE_A)),
+          (s[PAGE_A], {s[i] for i in range(25, 45) if p.want(i) > 0}), (1, {1}))
+    m.press(25); m.settle(40); m.tap(1, hold_ms=40, gap_ms=30); m.release(25); m.settle(40)   # preset 2
+    m.press(26); m.settle(30); m.tap(24); m.release(26); m.settle(80)
+    s = p.sent()
+    check('preset 2, length screen: PAGE %s' % pages(s), pages(s)[:2], [6, 1])
+
+
 def main():
     stock()
     preset1()
     playing()
     gesture()
     randomizer()
+    settings()
     print('%s -- the LEDs levelled (%d checks)' % ('PASS' if fail == 0 else 'FAIL', ok + fail))
     return 1 if fail else 0
 

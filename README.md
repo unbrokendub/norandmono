@@ -120,9 +120,11 @@ The instrument list is in [docs/instruments.md](docs/instruments.md).
 - **Levelled LEDs for a dark room.** Every lit LED is at the lowest
   brightness step. Only the playing step and PAGE A's tempo blink are
   brighter; TYPE and WAVE keep small steps, so the type and the wave still
-  show. TEMPO+FOLLOW steps through brighter presets (dim, normal and bright
-  then apart) and the stock levels, until power-off. `--led-level` sets
-  the power-on preset.
+  show. In the settings screens (FUNC+PATTERN length, scale and the rest)
+  the selected SEQ and PAGE keys light six times the dim level, so the
+  choice stays visible. TEMPO+FOLLOW steps through brighter presets (dim,
+  normal and bright then apart) and the stock levels, until power-off.
+  `--led-level` sets the power-on preset.
 
 ---
 

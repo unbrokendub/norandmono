@@ -156,9 +156,16 @@ extern "C" const uint32_t np_led_level;
  *   level, or darkens a bright LED's blink in proportion.
  * Presets {dim, normal, bright, high}: 1 everything at the lowest step the
  * HT16D35A has, 2..4 brighter with the three classes apart, 5 the stock's
- * own levels.  TEMPO+FOLLOW steps through them until the next power-on. */
+ * own levels.  TEMPO+FOLLOW steps through them until the next power-on.
+ * LS (p65): the settings screens (UI mode 3: FUNC+PATTERN's length, the
+ * scale, ...) show the choice on SEQ and PAGE as 16 among 5s, which the
+ * dark presets level to one step: there the chosen ones (normal and bright
+ * class) light six times the dim level.  A switch into or out of them
+ * marks those twenty LEDs: the writer revisits only dirty ones, and one
+ * whose request stays 16 across the switch would keep its old level. */
 namespace {
 constexpr unsigned kFollow = 1, kTempo = 25, kFunc = 26;
+constexpr uintptr_t kPanel = 0x2000DE54u;
 struct LedPreset { float dim, normal, bright, high; };
 constexpr LedPreset kLedPresets[4] = {{1, 1, 1, 4}, {1, 2, 3, 8}, {2, 4, 6, 16}, {3, 8, 12, 32}};
 constexpr unsigned kLedStock = 5;
@@ -186,6 +193,13 @@ extern "C" float np_led_target(const uint8_t *entry, unsigned index, float t)
     if (level < 1u || level > 4u)
         return t;
     const LedPreset &p = kLedPresets[level - 1u];
+    const uint32_t settings = reinterpret_cast<const volatile uint8_t *>(kPanel)[0x84] == 3u;
+    if (diag(D_LED_SETTINGS) != settings) {
+        diag(D_LED_SETTINGS) = settings;
+        auto *drv = reinterpret_cast<volatile uint8_t *>(0x2000190Cu + 0x94u + 3u);
+        for (unsigned i = 25; i < 45u; ++i)
+            drv[20u * i] = 1u;
+    }
     const auto *f = reinterpret_cast<const volatile int8_t *>(entry + 0x94);
     const int s = f[0] + f[1] + f[2];        /* base + pulse + overlay  */
     const float a = t - static_cast<float>(s); /* the writer's animation */
@@ -203,10 +217,10 @@ extern "C" float np_led_target(const uint8_t *entry, unsigned index, float t)
             l = 1.0f;
     } else if (s < 8) {
         l = p.dim;
-    } else if (s < 24) {
-        l = p.normal;
     } else {
-        l = p.bright;
+        l = s < 24 ? p.normal : p.bright;
+        if (settings && index - 25u < 20u && l < 6.0f * p.dim)   /* SEQ 1-16, PAGE A-D */
+            l = 6.0f * p.dim;
     }
     if (a > 0.0f) {
         const float h = a * (1.0f / 16.0f) * p.high;

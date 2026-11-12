@@ -90,6 +90,8 @@
 /* LV (p62): the LED level preset as TEMPO+FOLLOW last set it (1..4, 5 =
  * the stock's levels); 0 (every boot) means np_led_level, the build's */
 #define D_LED_LEVEL      0x13F4
+/* LS (p65): 1 while the LEDs were last levelled for a settings screen */
+#define D_LED_SETTINGS   0x13F8
 #define D_LED_PENDING 0xD50
 #define D_LED_EOT 0xD54
 #define D_LED_BUSY 0xD58

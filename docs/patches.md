@@ -1103,6 +1103,47 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
+## LS: the settings screens keep their choice visible (p65 — 2026-11-13)
+
+**The problem.** The settings screens are UI mode 3: FUNC+PATTERN's
+pattern length (setting 10), the scale (setting 1) and the rest. They show
+the current choice on SEQ and PAGE as a request of 16 among 5s. LV's dark
+presets level both classes to one step (preset 1: 1 and 1), so the chosen
+page, length step or scale could not be told apart.
+
+**The fix.** `np_led_target` now gives SEQ 1–16 and PAGE A–D (LEDs 25..44)
+a floor of six times the preset's dim level in mode 3, for the normal and
+bright classes:
+- preset 1: chosen 6, the rest 1;
+- preset 2: 6;
+- preset 3: 12;
+- preset 4: 18;
+- preset 5 is the stock and unchanged.
+
+Every other screen is as before.
+
+**Redrawing.** The writer revisits only dirty LEDs. An LED whose request
+stays 16 across the switch would keep its old level: PAGE A on entering
+the length screen of a one-page pattern, for one. So when the mode-3 state
+differs from the one last seen (`D_LED_SETTINGS`, `0x13F8`), those twenty
+LEDs are marked dirty.
+
+**Tests.** `tests/test_led_level.py` section 5 (4 new checks, 16 in all),
+read off the SPI frames:
+- length screen: PAGE A and SEQ 16 send 6, the rest 1;
+- PAGE D and SEQ 2 then move the 6;
+- leaving restores 1, even for PAGE A, whose request stays 16 throughout;
+- preset 2 gives 6 too.
+
+`test_led_fade`, `test_seq_led`, `test_scale_library`, `test_ui_chord`,
+static and bootloader pass. Image 523,872 bytes (416 under the cap).
+
+**Still levelled together** at preset 1, as since p63: the stock's other
+dim-versus-lit distinctions. These are long-note tails against note
+starts, a content pattern against the current one in pattern mode, note
+steps against locks in the parameter views, and scale tones against the
+selected note on the keyboard.
+
 ## SY: a Syncussion-style instrument (p64 — 2026-11-12)
 
 Instrument 43, `syncussion`, follows one channel of the Pearl Syncussion
