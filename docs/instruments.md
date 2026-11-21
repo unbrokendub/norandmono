@@ -1,6 +1,6 @@
 # Instruments
 
-The 44 instruments the mod-note generator builds, in catalogue order (the number is what
+The 54 instruments the mod-note generator builds, in catalogue order (the number is what
 `D_MNRAND_FORCE` and the tests use).  "Black keys" lists the held black key or pair that
 picks it; a set of keys that has no pair of its own picks the union of its single keys.
 
@@ -50,3 +50,17 @@ picks it; a set of keys that has no pair of its own picks the union of its singl
 | 41 | conga | conga, bongo, timbale | 4 | D# |
 | 42 | chord | dub chord | 4 | G#, G#+A# |
 | 43 | syncussion | a Pearl Syncussion SY-1 channel: modes A–F, one sweep on both VCOs and the filter, LFO trill or S&H | 4 | C#+F# |
+| 44 | organ | drawbar organ: two sines, percussion, key click, Leslie | 4 | G# |
+| 45 | gong | gong, tam-tam: FM that blooms after the stroke | 3 | G#, G#+A# |
+| 46 | bounce | bouncing octave: a held bass note hopping root/octave in time | 4 | F#+G# |
+| 47 | vargan | jaw harp: a low reed through a moving resonant filter | 3 | G# |
+| 48 | rumble | techno rumble: a low tone and noise under a dark low-pass, pumping with the beat | 3 | F#, F#+A# |
+| 49 | brass | synth brass: saws, the filter blatted open, a scoop up into the note | 4 | G# |
+| 50 | flute | flute, pan flute: a soft tone, breath and chiff, late vibrato | 3 | G# |
+| 51 | bowl | singing bowl: beating sines or the bowl's second mode, struck or rubbed | 3 | G#, G#+A# |
+| 52 | sub | sub bass: a sine two or three octaves down, its octave or twelfth quietly over it | 4 | F# |
+| 53 | deep | deep bass: a dark square or saw plucked open, a sine an octave under it | 4 | F# |
+
+Since p70, about 45 % of the basses (F# and F#+G#) are moved after their recipe: 20 % an
+octave down, 15 % keep the note with a sine an octave under it, 10 % a fifth down (an
+octave on a bass kit's key). Nothing sounds under C1.

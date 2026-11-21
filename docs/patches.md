@@ -1103,6 +1103,435 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
+## DB, p70: deeper basses, a sub bass and a deep bass (2026-11-20)
+
+**Request:** the basses were all not deep enough; half of them should sit
+lower, by an octave and somewhere in between. Asked which "in between", the
+user chose a little of everything.
+
+**DB, `deepen()`** (`np_mnrand.cpp`). After a bass's recipe (G_DEEP or
+G_BASS, in `instrument()`, so in single draws, kits, full sets and the
+normal-mode patch too), a draw moves 45 % of them:
+- 20 %: a whole octave down.
+- 15 %: the note stays and VCO2 becomes a sine (0..0x1000) an octave under
+  VCO1, level 0x5000–0x9000. VCO2 must be free: silent, no TZFM, no sync,
+  nothing on its pitch. Otherwise the bass goes an octave down instead.
+- 10 %: a fifth down. That transposes the mod note's whole line, so on a
+  bass kit's key, which plays a scale degree (`Context::degree`), it is an
+  octave instead.
+- The cutoff moves with the VCOs, so the timbre stays.
+- No move takes the lowest sounding VCO under C1 (MIDI 24, 32.7 Hz).
+  `sounds()` is the "is this VCO heard" test `mute()` already used, now
+  shared.
+- The `bass` recipe's sub-octave case could put VCO2 at 16 Hz (3 of 360
+  draws on p69); it is floored at C1 too (`floor_c1()`).
+
+**Two basses** (F#, weight 4 each):
+- **52 `sub`:** a sine (towards a triangle at most) two or three octaves
+  under the note, floored at C1. 45 % add its octave or twelfth quietly on
+  VCO2, for small speakers; 40 % add a short pitch drop. Held (60 %) or a
+  long decay. A low-pass 12–36 st over it, no resonance to speak of.
+- **53 `deep`:** the dub and deep-house bass. A square-to-saw VCO1 one or
+  two octaves under the note, a sine an octave under it on VCO2 (never
+  under C1), a dark low-pass 0–18 st over VCO1 that the envelope plucks
+  open (+15..+45 st), sustain 0.3–0.7.
+
+**Style weights** (sub, deep): techno 3 2, dub 5 4, acid 1 1, electro 3 1,
+ambient 2 1.
+
+**How deep, measured** (sysemu, played note C4; the lowest sounding VCO's
+note over 40 forced draws of each bass):
+
+| | under C1 | C1–F1 | F#1–C2 | C#2–C3 | over C3 |
+|---|---|---|---|---|---|
+| p69, nine basses | 1 % | 18 % | 56 % | 24 % | 2 % |
+| p70, the same nine | 0 % | 42 % | 37 % | 19 % | 2 % |
+| p70, with sub and deep | 0 % | 48 % | 35 % | 16 % | 1 % |
+
+**Levels** (bench, 9 draws each, target as before):
+- `deep`: median −29.0, energy −27.2, so level 52.
+- `sub`: median −31.7 and energy −25.3, spread 18 dB. K-weighting nearly
+  ignores a pure sine at C1, while the draws with an overtone measure
+  loud. The midpoint asked for 55, but that would put the energy over the
+  cap (−23.3, 0.9 dB over the kick's), so level 50.
+- The other basses keep their levels. A bass moved an octave down will
+  measure, and may sound, somewhat quieter. Not compensated: to be judged
+  by ear.
+
+**Tests:**
+- `test_modnote_random.py` has `sub` (a low sine, nothing under C1) and
+  `deep` (its sine exactly an octave under VCO1, not under C1). Its `bass`
+  and `808` checks accept the moved pitches.
+- `test_kits.py` passes (17 checks): every bass still on its degree.
+- A sysemu smoke passes, and the measurement above found no draw under C1.
+- Static and bootloader pass.
+- Image 524,000 bytes, 288 under the cap.
+
+## p69: techno rumble, synth brass, flute, singing bowl (2026-11-20)
+
+Four instruments in the space HM freed: 1,440 bytes, 1,088 left under the
+cap.
+
+**48 `rumble`** (F# and F#+A#, weight 3): a techno rumble, the washy tail of
+a kick sent through a long reverb and a low-pass.
+- VCO1 is a sine or triangle two or three octaves under the note.
+- VCO2 is noised (audio-rate S&H on its pitch).
+- A dark low-pass sits 6–30 st over VCO1, with resonance 0x3000–0x9000.
+- It holds: sustain 0.6–0.95.
+- **The pump:** a synced saw on VOLUME every quarter (one in four:
+  eighth). Measured in sysemu with the sequencer playing a step on every
+  beat, a positive depth rises from the beat: down on the beat, up to the
+  next.
+- The output volume's curve is steep (0.25 already gives 0.89). At a depth
+  of 0.4–0.8 the pump measured 0.85 → 0.88, a fraction of a dB, so the
+  depth is now 0.85–1.0. The volume then falls to 0.07–0.5 on each beat and
+  is back at 0.8–0.9 within an eighth of it: more a duck under the kick
+  than a slow swell.
+- Two times in three the same saw opens the cutoff 6–20 st, so the swell
+  sounds smoother. Otherwise the filter wanders at 1/16 (S&H, 4–14 st).
+- 30 % add a TZFM growl.
+- Being in F# it is one of the bass kit's basses now: nine to choose
+  eight from.
+
+**49 `brass`** (G#, weight 4): synth brass.
+- Saws (wave 0xE000 up): VCO2 detuned unison, or an octave or a fifth
+  away, in the scale.
+- A low-pass at cutoff 66–92 with ENV AMOUNT +30..+70 st, so the shared
+  envelope blats it open.
+- Three shapes: a blat (attack 20–80 ms, sustain 0.45–0.8), a stab
+  (3–15 ms, sustain 0.15–0.4) or a section swell (150–380 ms, sustain
+  0.6–0.9).
+- Both VCOs scoop up 0.6–2.5 st over 25–90 ms (one X-Env, copied).
+- 30 % add a 4.5–6.5 Hz vibrato on VCO1's detune.
+
+**50 `flute`** (G#, weight 3): flute and pan flute.
+- VCO1 is a sine to triangle at the note or one or two octaves up.
+- The breath is VCO2 two octaves up, noised. Its level carries the chiff
+  (an X-Env, 30–120 ms) and a little breath under the note.
+- The tone breathes in: attack 25–70 ms.
+- The vibrato comes late: 4.5–6 Hz, its depth faded in by an X-Env on dest
+  1, as the lead's.
+- The pan flute (40 %) has the filter towards band-pass (COLOR
+  0x2800–0x5800) and more breath.
+
+**51 `bowl`** (G# and G#+A#, weight 3): a singing bowl.
+- Two sines: VCO2 either 3–14 cents off VCO1, a slow beat (60 %), or the
+  bowl's second mode 16–18 st up, ±40 cents.
+- A 0.4–2.5 Hz tremolo on the volume.
+- Struck (65 %: decay and release 2.5–6.5 s) or rubbed (attack
+  200–1200 ms, held, release 1.5–6.5 s).
+
+**Style weights** (rumble, brass, flute, bowl), two bytes more per style:
+
+| style | rumble | brass | flute | bowl |
+|---|---|---|---|---|
+| techno | 5 | 1 | 0 | 0 |
+| dub | 2 | 3 | 2 | 1 |
+| acid | 3 | 1 | 0 | 0 |
+| electro | 1 | 3 | 1 | 0 |
+| ambient | 2 | 1 | 3 | 5 |
+
+**Levels** (bench, as SY and p66: target midpoint −25.8 in this scale):
+
+| instrument | draws | median | energy mean | level |
+|---|---|---|---|---|
+| rumble | 9 at 40, deep pump | −22.4 | −21.3 | 25 |
+| brass | 6 at 40 | −25.7 | −25.9 | 40 |
+| flute | 6 at 40 | −26.5 | −24.7 | 39 |
+| bowl | 6 at 40 | −20.5 | −19.2 | 20 |
+
+**Tests:**
+- `test_modnote_random.py` has the four instruments, their groups and a
+  check each:
+  - rumble: low, the synced saw on VOLUME, holds;
+  - brass: ENV AMOUNT up, the same scoop on both VCOs;
+  - flute: breath S&H on VCO2, the vibrato's X-Env on dest 1, holds;
+  - bowl: the tremolo, still ringing at 280 ms.
+- A sysemu smoke of five draws each, then three, passes.
+- `test_kits.py` passes (17 checks) with rumble among the bass kit's
+  basses.
+- Static and bootloader pass.
+- Image 523,200 bytes.
+
+## HM: more holes, packed automatically (p68 — 2026-11-17)
+
+HL put code into one stretch of stock code the patches leave unreachable.
+HM finds every such stretch and fills them all.
+
+**The scan** (`tools/holes.py`, run on the patched image) collects every
+reference in the image by decoding at every halfword. That covers the stock
+part and the blob alike, and it over-approximates: data read as an
+instruction can only add references, so it can hide a hole but never invent
+one. It counts:
+- 32-bit `b`, `bl` and conditional branches;
+- 16-bit `b`, conditional branches, `cbz`/`cbnz`;
+- pc-relative `ldr`, `ldr.w`, `ldrd`, `vldr`, `adr`;
+- every halfword-aligned word whose value points into the image;
+- `movw`/`movt` pairs that build an image address (the blob's DSP code
+  does).
+
+A stock function counts as dead when nothing outside it refers into it and
+nothing can fall into it. Its body counts as dead when the only references
+are to its first instruction and that is now a `b.w` into the blob.
+
+**17 holes, 3,618 bytes.** Each is used only with the option that makes it
+dead:
+
+| range | bytes | what | option |
+|---|---|---|---|
+| `0x08144770` | 1356 | mod-note randomizer body (HL) | R1 |
+| `0x0811A904` | 908 | MIDI out fan-out: its one call goes to `np_midi_fanout` | MF |
+| `0x0811BD4C` | 476 | `LFOTimeCParam::vfn2` body | H (`--xmod`) |
+| `0x0811BBAC` | 412 | `LFOSpeedCParam::vfn2` body | H |
+| `0x08110330` | 112 | USB-MIDI receive ring push: its one call goes to `np_usb_rx_put` | MF |
+| `0x0811AC94` | 60 | DIN transmit body | J (`--midi`) |
+| `0x0810EEA4` | 24 | USART1 IRQ body | J |
+| six UI state helpers' bodies | 36 + 5 × 24 | | U (`--ui-chords`) |
+| `_sbrk`, `__malloc_lock`, `__malloc_unlock`, `operator new` bodies | 36, 20, 28, 30 | | always |
+
+**Packing** (`tools/patch.py`):
+- `pack_holes()` takes `np_mnrand.o`'s function and table sections that
+  the link keeps; a first link with `--print-gc-sections` says which those
+  are. It places them first fit, largest first, into the usable holes,
+  largest first, at each section's alignment. That alignment is the order
+  ld lays them out in.
+- `write_lds()` turns the template `patch/np.ld` into `build/np.ld`: one
+  output section per filled hole, with an `ASSERT` on its size.
+- Whatever is not placed stays in the blob, so a build with an option off
+  just has a larger blob.
+- `write_holes()` checks each hole's stock bytes against a CRC, writes the
+  section and fills the rest with `udf`.
+- The manifest of what went where, bytes included, is written next to the
+  image (`<image>.holes.json`).
+- The `HOLE()` markers of p66 are gone: nothing in the source says where a
+  function goes.
+
+Result: 3,616 of the 3,618 bytes are filled. The image went from 524,032
+bytes to 521,760, so 2,528 bytes are free under the cap instead of 256.
+With an option off it stays under the cap: `--no-midi-flow` 1,504 bytes
+free, `--no-xmod` 1,664, `--no-smart-random` 1,184, `--no-midi
+--no-ui-chords` 2,304.
+
+**Also changed:**
+- A `patch.py` check that the X-Mod handlers' 1/126 and 126 literals were
+  untouched now runs only without H. Those literals sit in the two
+  handlers' pools, which H replaces whole and HM reuses.
+- `test_midi_flow.py`'s stock rig and `probe_p6_usb_drop.py` write the
+  stock fan-out and ring push back before calling them.
+- `test_static_patch.py` checks every hole against the manifest: section,
+  `udf` fill, and the entry branch or redirected caller that makes it dead.
+
+**Left:** after HM the scan finds `0x0811A738` (40 bytes), the stock DIN
+receive ring writer, whose only caller was the USART1 IRQ body.
+
+**Tests:**
+- static and bootloader pass;
+- `test_midi_flow` (25 checks), `test_patch`, `test_kits` (17),
+  `test_ui_chord` (264), `test_pool_reserve` and `probe_p6_usb_drop` pass;
+- a sysemu smoke passes: every instrument forced once, seven black-key
+  sets, a drum kit, a bass kit, a styled set and A#;
+- the four option builds above pass too.
+
+## KB: a bouncing key contact no longer loses its edge (p67 — 2026-11-17)
+
+**Report.** With an external MIDI clock, UP+DOWN no longer left mod-note
+mode and TEMPO+FUNC+note did nothing. A visit to the scale setting cured
+it.
+
+**What reproduces it.** Every chord fails when one key's release never
+reaches the UI. That key stays held in the shadow, and its modifier bit
+stays in the mask (`UI+0x7C`), so the gesture lookup misses. Dropping one
+release in sysemu showed it for every key tried: a note key, TEMPO, FUNC,
+UP, DOWN, PATTERN, SEQ, PAGE, RECORD, TYPE, FOLLOW, DELETE. It lasts until
+that key is pressed again; for a note key, any note key, since they share
+one mask bit. In the scale setting the note keys pick the root, which
+would end it.
+
+**Where a release is lost.**
+- The DMA1_Stream0 handler (`0x0810F208`, vector `0x0810006C`) scans one
+  matrix row every 250 µs (`0x0810F5D0`), so each key is sampled every
+  2 ms into an 8-bit shift register (entry `+0xA`, 12-byte entries).
+- A press is taken only when the register is exactly `0x0F` (four open
+  samples, then four closed), a release only at exactly `0xF0`.
+- A contact that reads closed again for a moment after opening never
+  produces `0xF0`. The release is never sent.
+- The same happens to a press that bounces: no `0x0F`, no press.
+
+Measured in sysemu on the stock image:
+- 17 of 90 release bounces leave the key held: re-closing 1–6 ms after
+  opening, for 0.5–6 ms.
+- 7 of 12 bounced presses are lost.
+- With a bounced note release, UP+DOWN changes nothing.
+
+Tactile switches bounce for a few milliseconds, more as they wear.
+
+**Not found:** a link to the external clock. Six fuzz runs of 150 random
+gestures each under a DIN clock (Start, Stop, Continue, tempo changes,
+mod-note and normal mode, kits, settings, tempo entry) never lost a
+chord, and neither did held or hanging MIDI notes. The fuzz presses
+cleanly, so it cannot show a bounce. Whether a bounce was the trigger on
+the unit is not proven.
+
+**The fix** (`--no-key-debounce` for the stock): the two compares become
+calls to `np_scan_press` / `np_scan_release` (np_patch.S).
+- At `0x0810F62A`, `ldrb.w r3,[fp,#0xa]; cmp r3,#0xf` becomes `bl` + `nop`.
+  A press is now the last four samples closed while the key's debounced
+  flag (`+0x12`) is clear.
+- At `0x0810F638`, `ldrb r3,[r6,#0xa]; cmp r3,#0xf0` becomes `bl`. A
+  release is now the last four samples open while the flag is set.
+- The flag is written only by the scanner: 1 at a press, 0 at a release.
+- The `beq` after each call is stock. The calls return Z for an edge and
+  touch only r3 and the flags; the scanner saved lr at entry.
+- The long-hold count (exactly `0xFF`, 200 samples) is unchanged.
+- A bounce now only delays an edge, by at most the bounce.
+
+**Tests:** `tests/test_key_bounce.py` (9 checks, the real scanner,
+dispatcher and UI):
+- the stock's 17 of 90 held keys and its blocked UP+DOWN, as a control;
+- here 0 of 90, with presses and releases strictly alternating and as many
+  of each;
+- 0 of 12 bounced presses lost (stock 7);
+- a clean tap and a 700 ms hold deliver press, (long hold), release as
+  before;
+- UP+DOWN works after a bounced release.
+
+`test_ui_chord` (264 scenarios) and `probe_ui_chord` (132, including the
+real GPIO scanner), static and bootloader pass. Image 524,032 bytes, 256
+under the cap.
+
+## HL, p66: code in the stock randomizer's body; organ, gong, bouncing octave, jaw harp (2026-11-16)
+
+### HL: the hole
+
+**The space.** R1 turned the entry of the stock mod-note randomizer
+(`0x0814476C`) into a branch to `np_modnote_random`. The rest of that
+function, `0x08144770` up to the next function at `0x08144CBC`, is 1,356
+bytes of dead code inside the image, which the 512 KiB cap counts anyway.
+
+**Why it is safe to reuse.** A scan of raw encodings over the whole image
+(not a disassembly listing) finds one reference to the function: the `bl`
+to its entry in the thunk at `0x0811EC7E`. There is:
+- no 32-bit branch (`bl`, `b.w`, conditional) into the body from outside;
+- no 16-bit branch or `cbz` from the neighbouring code;
+- no word anywhere whose value lies inside it (no pointer, no table);
+- no pc-relative load or `adr` from outside into its literal pool.
+
+**How.**
+- `patch/np.ld` has a second output section, `.hole`, at `0x08144770`. It
+  collects the input sections `.np_hole.*`, and an `ASSERT` fails the link
+  past 1,356 bytes.
+- `np_mnrand.cpp` marks functions `HOLE(name)`, one section each, so the
+  linker still drops an unused one. Their literal pools go with them; their
+  tables stay in the blob's `.rodata`.
+- `tools/patch.py` extracts `.text` and `.hole` separately, checks the CRC
+  of the stock bytes it replaces, writes `.hole` there and fills the spare
+  bytes with `udf`. It does this only with R1; `--no-smart-random` leaves
+  the stock function whole, and nothing reaches the hole's code then, as
+  every generator hook needs R1.
+- `tests/test_static_patch.py` checks the hole against `build/np_hole.bin`,
+  the `udf` fill, the stock bytes on both sides and the thunk's `bl`.
+- `test_modnote_random.py`'s stock-handler rig now writes the whole stock
+  function back, not only its first four bytes.
+
+**In the hole now:** `drop`, `chord`, `organ`, `gong`, `bounce`, `vargan`:
+1,352 of 1,356 bytes. The image is 523,968 bytes, 320 under the cap; before
+these four instruments it had 416.
+
+### Four instruments
+
+**44 `organ`** (G#, weight 4): a drawbar organ.
+- Two sines (wave 0..0x1800). VCO1 at the note or an octave under (30 %);
+  VCO2 an octave, a twelfth or two octaves over it, or an octave under.
+  The stops are harmonics, so they are not fitted to the scale.
+- Sustain 0.9–1.0, release 15–90 ms: it holds while the key does.
+- Percussion (50 %): VCO2 low, with an X-Env on its level, 120–500 ms.
+- Key click (60 %): an X-Env blip on the TZFM, 2–12 ms.
+- Leslie (65 %): one LFO rate, 0.6–1.1 Hz or 5.5–7.5 Hz, on VCO2's detune
+  and on the volume.
+
+**45 `gong`** (G# and G#+A#, weight 3): a gong or tam-tam.
+- VCO2 a low sine, one or two octaves under the note. VCO1 sits 4–20 st
+  over it, ±90 cents, and modulates it through the TZFM.
+- The bloom: the X-Env on the TZFM has an attack of 150–1500 ms and a
+  decay of 1.5–5 s, where the bell's index dies from the stroke. The same
+  attack and decay open the low-pass by 10–45 st.
+- Half of them add a ratio FM at an irrational ratio to both VCOs
+  (`four_op`, 1–8 st): the tam-tam's wash.
+- Decay and release 2.5–6.5 s.
+
+**46 `bounce`** (F#+G#, weight 4): the bouncing octave.
+- A synced square X-Mod on VCO1's pitch. The base sits halfway between two
+  notes and the depth is half the interval, so the note hops between the
+  root and its octave (3 in 5), its fifth or two octaves. The fifth is
+  used only when the scale has it.
+- Divisions: 1/8 (a hop every sixteenth, 3 in 6), 1/4 (every eighth) or
+  1/16 (a trill).
+- Phase, measured in sysemu with the sequencer playing steps 1–8: with a
+  positive depth the root comes first from the pattern's start. At 1/8
+  the steps start root, upper, root, upper; at 1/4 root, root, upper,
+  upper; at 1/16 every step starts on the root and hops inside it. A
+  negative depth gave the reverse, so the depth is positive. With the
+  transport stopped the LFO free-runs, so a key played by hand starts on
+  either note.
+- The square is clean: the pitch is on one of the two notes for the whole
+  trace, exactly 12.00 or 7.00 st apart.
+- VCO2 (50 %) holds the root underneath.
+- Half the time a second synced square, same division and sign, opens the
+  filter 4–16 st on the upper note.
+- The bass kit now has eight basses for eight keys. Its draw retried 24
+  times for an unused one, which misses the last bass about one time in
+  ten; a key still on a repeat now takes the first unused bass (of the
+  style's, if a style is set).
+
+**47 `vargan`** (G#, weight 3): a jaw harp.
+- A square-to-saw VCO one or two octaves under the note, which never
+  moves.
+- A filter between band- and low-pass (COLOR 0x2800–0x6000) at RESO
+  0xB000–0xE000, cutoff 84–104. The drone stays under the moving peak.
+- The VCO drives the filter hard (level 0xC000–0xFFFF).
+- The twang: an X-Env on the cutoff, up or down 8–24 st, 80–450 ms.
+- The mouth: an LFO on the cutoff, 4–12 st, synced 1/4–1/16 (65 %) or free
+  1.5–7 Hz; sine, triangle or sample & hold.
+- Two drafts were dropped. The first swept the filter up to 82 st in all,
+  far outside the harmonics. The second, a pure band-pass with a softer
+  VCO, measured 13 dB under the target at the top level.
+
+**Style weights** (organ, gong, bounce, vargan): techno 1 1 2 1, dub
+3 1 1 2, acid 0 0 3 1, electro 1 0 5 1, ambient 2 4 0 2. The style table
+grows by two bytes a style.
+
+**Levels** (bench, BS.1770 momentary maximum of 300 ms notes; target as in
+SY, the midpoint of median and energy mean 1.6 dB under the kick's energy
+mean of −24.2):
+
+| instrument | draws | median | energy mean | level |
+|---|---|---|---|---|
+| organ | 6 at 30 | −23.9 | −23.2 | 23 |
+| gong | 6 at 30 | −24.7 | −24.9 | 27 |
+| bounce | 6 at 25 | −26.6 | −26.8 | 28 |
+| vargan | 9 at 100 | −21.9 | −21.7 | 63 |
+
+The gong's bloom can come after the 300 ms note, so its figure leans on
+the stroke. The vargan's draws spread 13 dB.
+
+**Tests:**
+- Bootloader and static pass.
+- `tests/test_kits.py` passes (17 checks): eight different basses on the
+  bass kit's keys, the bouncing octave's root on its degree.
+- `test_modnote_random.py` has the four instruments, their groups and a
+  check each. The long suite was not run.
+- sysemu smokes on the image as built:
+  - forced draws of the six functions in the hole, all sounding and
+    finite, with each new one's check met: the organ's stops and hold,
+    the gong's index attack, the bounce's two notes, the vargan's
+    resonance and moving cutoff;
+  - G#, F#+G# and G#+A#, 24 draws each, all inside their group;
+  - G# in two styles, A#, a drum kit and a bass kit, without a fault;
+  - the stock-handler rig with the whole stock function written back.
+- One stale bound showed up in a moved function: `drop`'s cutoff sweep
+  check wants 4 st and one draw gave 3. Its recipe is unchanged; p61
+  widened the range.
+
 ## LS: the settings screens keep their choice visible (p65 — 2026-11-13)
 
 **The problem.** The settings screens are UI mode 3: FUNC+PATTERN's

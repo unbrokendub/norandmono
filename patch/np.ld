@@ -10,6 +10,13 @@ ENTRY(np_base)
 
 SECTIONS
 {
+    /* HL (p66), HM (p68): stock code our patches leave unreachable holds
+     * functions of ours.  tools/patch.py replaces the marker below with one
+     * output section per usable hole -- address, the input sections packed
+     * into it, an ASSERT on its size -- and writes the sections there
+     * (HOLES in patch.py).  What it does not place stays in .text. */
+    /* @HOLES@ */
+
     . = 0x08175200;
 
     .text :

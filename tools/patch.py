@@ -23,9 +23,11 @@ tool refuses to touch an image it does not recognise.
 """
 
 import argparse
+import json
 import os
 import struct
 import subprocess
+import zlib
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -48,6 +50,38 @@ SRC_MNRAND = "patch/np_mnrand.cpp"
 LDS = "patch/np.ld"
 ELF = "build/np_patch.elf"
 BIN = "build/np_patch.bin"
+# HL (p66), HM (p68): stock code our patches leave unreachable -- the body
+# behind an entry that now branches into the blob, or a whole function whose
+# one call now goes to ours.  Found by collecting every reference in the
+# patched image (raw encodings at every halfword: 32/16-bit branches, cbz,
+# pc-relative ldr/ldr.w/ldrd/vldr, adr, words, movw/movt pairs): nothing
+# outside these ranges refers into them.  A hole is used only with the
+# option that makes it dead (None: patched in every build); pack_holes()
+# fills the usable ones with np_mnrand.o's sections and np.ld gets an output
+# section for each.  (base, end, option, zlib.crc32 of the stock bytes, what)
+HOLES = [
+    (0x08144770, 0x08144CBC, "smart_random", 0xFA2358DD, "mod-note randomizer body (R1)"),
+    (0x0811A904, 0x0811AC90, "midi_flow",    0xA3D7D33C, "MIDI out fan-out (MF1/MF2)"),
+    (0x0811BD4C, 0x0811BF28, "xmod",         0x44FB6375, "LFOTimeCParam::vfn2 body"),
+    (0x0811BBAC, 0x0811BD48, "xmod",         0xB04FC236, "LFOSpeedCParam::vfn2 body"),
+    (0x08110330, 0x081103A0, "midi_flow",    0x67FA2C4A, "USB-MIDI receive ring push (MF4)"),
+    (0x0811AC94, 0x0811ACD0, "midi",         0x5540E67B, "DIN transmit body (J)"),
+    (0x0814A318, 0x0814A33C, "ui_chords",    0x3F14BA2F, "UI all-up reconcile body"),
+    (0x0811967C, 0x081196A0, None,           0xC2EC4BCD, "_sbrk body (A4)"),
+    (0x081591D8, 0x081591F6, None,           0x089965DA, "operator new body"),
+    (0x081196BC, 0x081196D8, None,           0x5632DCD7, "__malloc_unlock body"),
+    (0x0814A340, 0x0814A358, "ui_chords",    0x65CA3183, "UI consumed getter body"),
+    (0x0814A35C, 0x0814A374, "ui_chords",    0xE0818252, "UI consume setter body"),
+    (0x0814A378, 0x0814A390, "ui_chords",    0x6AD11244, "UI long-hold getter body"),
+    (0x0814A394, 0x0814A3AC, "ui_chords",    0x52327C45, "UI pressed getter body"),
+    (0x0814A3B0, 0x0814A3C8, "ui_chords",    0xF0E241E5, "UI consume-clear body"),
+    (0x0810EEA4, 0x0810EEBC, "midi",         0xECE3B85C, "USART1 IRQ body (J)"),
+    (0x081196A4, 0x081196B8, None,           0x0BC965AD, "__malloc_lock body"),
+]
+HOLE_FILL = b"\xff\xde"           # udf #0xff: a stray jump faults at once
+HOLE_OBJ = "build/np_mnrand.o"    # main-loop code, never timed: what may move
+HOLE_MANIFEST = "build/np_holes.json"
+LDS_BUILT = "build/np.ld"
 
 # must match the firmware: the stock code uses d-registers (vpush {d8}),
 # so this is an FPv5-D16 hard-float build
@@ -134,7 +168,54 @@ def crc32(data):
 
 # ---------------------------------------------------------------------------
 
-def assemble(follow_osc1=False, dsp_opt="O3", midi=True, ev_log=True, telemetry=False):
+def usable_holes(args):
+    return [h for h in HOLES if h[2] is None or getattr(args, h[2])]
+
+
+def pack_holes(holes, removed):
+    """First fit, largest section first, into the holes largest first: each
+    of np_mnrand.o's sections that the link keeps, at its own alignment, in
+    the order ld will lay them out.  {hole base: [section names]}"""
+    out = subprocess.run(["arm-none-eabi-objdump", "-h", HOLE_OBJ], check=True,
+                         capture_output=True, text=True).stdout
+    sections = []
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 7 and f[1].startswith((".text.", ".rodata.")) and f[6].startswith("2**"):
+            size, align = int(f[2], 16), 1 << int(f[6][3:])
+            if size and f[1] not in removed:
+                sections.append((size, align, f[1]))
+    sections.sort(key=lambda x: (-x[0], x[2]))
+    order = sorted(holes, key=lambda h: (-(h[1] - h[0]), h[0]))
+    cursor = {h[0]: h[0] for h in order}
+    placed = {h[0]: [] for h in order}
+    for size, align, name in sections:
+        for h in order:
+            start = (cursor[h[0]] + align - 1) & -align
+            if start + size <= h[1]:
+                placed[h[0]].append(name)
+                cursor[h[0]] = start + size
+                break
+    return placed
+
+
+def write_lds(holes, placed):
+    text = open(LDS).read()
+    rows = []
+    for base, end, _, _, what in holes:
+        if not placed.get(base):
+            continue
+        sec = ".hole_%08X" % base
+        rows.append("    %s 0x%08X :\n    {\n%s\n    }\n"
+                    "    ASSERT(SIZEOF(%s) <= %d, \"%s: the hole is %d bytes\")"
+                    % (sec, base, "\n".join("        *np_mnrand.o(%s)" % n for n in placed[base]),
+                       sec, end - base, what, end - base))
+    if "/* @HOLES@ */" not in text:
+        raise SystemExit("%s has no /* @HOLES@ */ marker" % LDS)
+    open(LDS_BUILT, "w").write(text.replace("/* @HOLES@ */", "\n\n".join(rows)))
+
+
+def assemble(follow_osc1=False, dsp_opt="O3", midi=True, ev_log=True, telemetry=False, holes=()):
     """Build the blob: np_patch.S plus np_lfo.cpp, linked at BLOB_BASE.
 
     Both sources read NP_XMOD_FOLLOW and they have to agree: the parameter
@@ -194,15 +275,54 @@ def assemble(follow_osc1=False, dsp_opt="O3", midi=True, ev_log=True, telemetry=
     subprocess.run(["arm-none-eabi-g++", "-c", "-Os", "-fno-inline"] + CXXFLAGS + define +
                    [SRC_MNRAND, "-o", obj], check=True)
     objs.append(obj)
-    subprocess.run(["arm-none-eabi-ld", "-T", LDS, "--no-warn-rwx-segments",
+    # pass 1: no holes, to learn which sections the link keeps; then the
+    # holes packed with them, and the real link
+    write_lds(holes, {})
+    gc = subprocess.run(["arm-none-eabi-ld", "-T", LDS_BUILT, "--no-warn-rwx-segments",
+                         "--gc-sections", "--print-gc-sections", "-e", "np_base"] + objs + ["-o", ELF],
+                        check=True, capture_output=True, text=True).stderr
+    removed = {line.split("'")[1] for line in gc.splitlines()
+               if "removing unused section" in line and "np_mnrand.o" in line}
+    placed = pack_holes(holes, removed)
+    write_lds(holes, placed)
+    subprocess.run(["arm-none-eabi-ld", "-T", LDS_BUILT, "--no-warn-rwx-segments",
                     "--gc-sections", "-e", "np_base"] + objs + ["-o", ELF],
                    check=True)
-    subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", ELF, BIN], check=True)
+    # one file per output section: the blob past the image's end, and each
+    # hole inside the stock image
+    subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", "-j", ".text", ELF, BIN], check=True)
+    manifest = []
+    for base, end, option, crc, what in holes:
+        path = "build/np_hole_%08X.bin" % base
+        if os.path.exists(path):
+            os.remove(path)
+        if placed.get(base):
+            subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", "-j", ".hole_%08X" % base,
+                            ELF, path], check=True)
+            manifest.append({"base": base, "end": end, "what": what, "sections": placed[base],
+                             "code": open(path, "rb").read().hex()})
+    open(HOLE_MANIFEST, "w").write(json.dumps(manifest, indent=1))
 
     blob = open(BIN, "rb").read()
     if blob[:4] != b"NPAT":
         raise SystemExit("linker did not place np_base first in the blob")
     return blob
+
+
+def write_holes(image, log):
+    """HL/HM: each packed hole into the image, the rest of it udf"""
+    for row in json.load(open(HOLE_MANIFEST)):
+        base, end = row["base"], row["end"]
+        crc = next(h[3] for h in HOLES if h[0] == base)
+        if zlib.crc32(bytes(image[base - BASE:end - BASE])) != crc:
+            raise SystemExit("0x%08X: %s is not the expected stock code" % (base, row["what"]))
+        code = bytes.fromhex(row["code"])
+        if len(code) > end - base or len(code) & 1:
+            raise SystemExit("0x%08X: %d bytes packed into a %d-byte hole" % (base, len(code), end - base))
+        image[base - BASE:end - BASE] = code + HOLE_FILL * ((end - base - len(code)) // 2)
+        log.append((base, "%s -> %d bytes of ours (HL/HM), %d spare"
+                    % (row["what"], len(code), end - base - len(code)),
+                    "(%d stock bytes)" % (end - base), "(%d sections)" % len(row["sections"])))
 
 
 class Header:
@@ -260,7 +380,8 @@ class Header:
          self.load_done, self.proj_service,
          self.save_gate, self.boot_load,
          self.project_fail, self.rotate_guard, self.led_level,
-         self.led_target) = struct.unpack_from("<27I", blob, 0x190)
+         self.led_target, self.scan_press,
+         self.scan_release) = struct.unpack_from("<29I", blob, 0x190)
 
     OFF_FLAGS = 0x05
     OFF_WDG_PR = 0x06
@@ -288,7 +409,8 @@ def build(args):
 
     blob = bytearray(assemble(follow_osc1=args.xmod_follow_osc1,
                               dsp_opt=args.dsp_opt, midi=args.midi,
-                              ev_log=args.ev_log, telemetry=args.telemetry))
+                              ev_log=args.ev_log, telemetry=args.telemetry,
+                              holes=usable_holes(args)))
     hdr = Header(blob)
 
     # ---- assemble the final image ------------------------------------
@@ -603,6 +725,21 @@ def build(args):
              thumb_b_w(0x08117594, hdr.noteoff_entry & ~1),
              "note-off -> lets a held note-on go first (CH)")
 
+    # ---- KB: key edges with hysteresis (p67) -----------------------------
+    # The key scanner takes a press only on the exact pattern 0x0F and a
+    # release only on 0xF0 in each key's sample register; one bounce sample
+    # loses the edge, and a lost release leaves the key held for the UI
+    # (every chord fails until it is pressed again).  The two compares
+    # become calls that take an edge on the last four samples and the key's
+    # debounced flag (np_patch.S: np_scan_press / np_scan_release).
+    if args.key_debounce:
+        poke(0x0810F62A, bytes.fromhex("9bf80a300f2b"),
+             thumb_bl(0x0810F62A, hdr.scan_press & ~1) + bytes.fromhex("00bf"),
+             "key scanner press edge -> last four closed, not held (KB)")
+        poke(0x0810F638, bytes.fromhex("b37af02b"),
+             thumb_bl(0x0810F638, hdr.scan_release & ~1),
+             "key scanner release edge -> last four open, held (KB)")
+
     # ---- R1: the mod-note randomizer builds an instrument --------------
     # TEMPO+FUNC+note in mod-note mode.  The stock handler gives some thirty
     # unrelated parameters independent values; np_modnote_random picks an
@@ -613,6 +750,8 @@ def build(args):
         poke(0x0814476C, bytes.fromhex("08680028"),
              thumb_b_w(0x0814476C, hdr.modnote_random & ~1),
              "mod-note randomizer -> instrument recipes (R1)")
+        # HL: the rest of that function is dead now -- one of the HOLES,
+        # written with the others at the end (write_holes)
 
     # ---- R2: black + white keys pick the instrument group --------------
     # In mod-note mode a white key pressed while black keys are held builds
@@ -1085,6 +1224,9 @@ def build(args):
         struct.pack_into("<I", image, blob_off + Header.OFF_CRC_LEN, STOCK_SIZE)
     image[blob_off + Header.OFF_FLAGS] = flags
 
+    # HL/HM: code of ours in stock code the patches above left unreachable
+    write_holes(image, log)
+
     # CRC is taken after every code patch, over the stock extent only
     if args.crc:
         struct.pack_into("<I", image, blob_off + Header.OFF_CRC,
@@ -1132,6 +1274,9 @@ def build(args):
     # ---- write ---------------------------------------------------------
     open(out_bin, "wb").write(image)
     open(out_syx, "wb").write(syx)
+    # what went into the holes, next to the image it describes (the static
+    # test checks the image against it)
+    open(out_bin + ".holes.json", "w").write(open(HOLE_MANIFEST).read())
 
     print("patched image : %d bytes (stock %d, blob %d at 0x%08X); "
           "%d bytes under the bootloader's 512 KB cap"
@@ -1218,6 +1363,9 @@ def verify_sites(image, log, hdr):
         0x0815602A: ("bl", hdr.late & ~1),
         0x08119A02: ("bl", hdr.wdg_hook & ~1),
     }
+    if any(a == 0x0810F62A for a, _, _, _ in log):
+        expect[0x0810F62A] = ("bl", hdr.scan_press & ~1)
+        expect[0x0810F638] = ("bl", hdr.scan_release & ~1)
     if any(a == 0x08155C7C for a, _, _, _ in log):
         expect[0x08155C7C] = ("b", hdr.ui_switch & ~1)
         expect[0x081504FA] = ("bl", hdr.ui_begin_unlink & ~1)
@@ -1275,13 +1423,17 @@ def verify_sites(image, log, hdr):
 
     # the X-Mod pitch literals must still read 126, i.e. the withdrawn G3 is
     # really gone.  See the note at the G3 slot: the divide undoes the
-    # multiply by 126 at 0x08112810, so 127 there would be the bug.
-    for addr, want in ((0x0811BD2C, 1.0 / 126.0), (0x0811BF14, 1.0 / 126.0),
-                       (0x0811BD40, 126.0), (0x0811BF20, 126.0)):
-        got = struct.unpack_from("<f", image, addr - BASE)[0]
-        if abs(got - want) > 1e-9:
-            raise SystemExit("0x%08X: literal is %r, expected %r"
-                             % (addr, got, want))
+    # multiply by 126 at 0x08112810, so 127 there would be the bug.  They
+    # sit in the two parameter handlers' literal pools, which H replaces
+    # whole: with H in, those bodies are holes of ours (HM) and nothing reads
+    # the literals any more.
+    if not any(a in (0x0811BBAC, 0x0811BD4C) for a, _, _, _ in log):
+        for addr, want in ((0x0811BD2C, 1.0 / 126.0), (0x0811BF14, 1.0 / 126.0),
+                           (0x0811BD40, 126.0), (0x0811BF20, 126.0)):
+            got = struct.unpack_from("<f", image, addr - BASE)[0]
+            if abs(got - want) > 1e-9:
+                raise SystemExit("0x%08X: literal is %r, expected %r"
+                                 % (addr, got, want))
 
     # fault and profiled vector entries must be odd (Thumb), in the blob
     for slot in (3, 4, 5, 6, 15, 24, 27, 66):
@@ -1425,6 +1577,8 @@ def main():
     b.add_argument("--no-midi", dest="midi", action="store_false",
                    help="leave the stock MIDI DIN transmitter alone")
     b.add_argument("--midi", dest="midi", action="store_true")
+    b.add_argument("--no-key-debounce", dest="key_debounce", action="store_false", default=True,
+                   help="leave the key scanner's exact-pattern edges (stock: a bounce loses a press or a release)")
     b.add_argument("--no-ui-chords", dest="ui_chords", action="store_false",
                    help="leave the stock UI button-state helpers (A/B for UI hangs)")
     b.add_argument("--ui-chords", dest="ui_chords", action="store_true")

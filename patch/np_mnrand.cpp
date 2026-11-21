@@ -252,6 +252,7 @@ struct Kit {
 struct Context {
     uint16_t scale;      /* bit n: n semitones above the root is in it; 0 = chromatic */
     uint8_t root;
+    uint8_t degree;      /* p70: a bass kit key, which plays a degree: keep the note */
     int played;          /* MIDI */
     Kit *kit;            /* a kit being built, or null */
 };
@@ -414,6 +415,13 @@ constexpr unsigned kFenv0 = 0x7FFF;   /* ENV AMOUNT: no effect       */
 
 void fm_index(Patch &p, Gen &g, unsigned detent, unsigned d_lo, unsigned d_hi,
               unsigned a_lo, unsigned a_hi);
+int floor_c1(const Patch &p, int st);
+
+/* HL (p66), HM (p68): some of this file's functions and tables live inside
+ * the stock image, in code our patches left unreachable (the body of the
+ * stock randomizer this file replaces among it).  tools/patch.py chooses
+ * which (pack_holes): every function and table here has a section of its
+ * own, so nothing in the source says where it goes. */
 
 /* ---- p43: techniques ------------------------------------------------------
  * Every slot's X-Mod is a full oscillator -- a free LFO, a synced one, an
@@ -846,7 +854,7 @@ void bass(Patch &p, Gen &g)
         break;
     case 2:                                             /* sub octave   */
         p.base(VCO2_WAVE, RAW(kSine), RAW(kSquare));
-        p.base(VCO2_TUNE, tune(st - 12));
+        p.base(VCO2_TUNE, tune(floor_c1(p, st - 12)));  /* p70: not under C1 */
         p.base(VCO2_VOL, 0x5000, 0xA800);
         break;
     case 3: {                                           /* fat unison   */
@@ -1974,6 +1982,291 @@ void syncussion(Patch &p, Gen &g)
         p.noise(VCO2_TUNE, RAW(semis(40)), RAW(semis(110)));
 }
 
+/* ---- p66: four more ------------------------------------------------------------ */
+
+/* a drawbar organ: two sines, the upper an octave, a twelfth or two octaves
+ * over the lower (or the sub octave under it), held at full level while the
+ * key is.  The percussion is the upper one ringing down from the attack, the
+ * key click a blip of TZFM, the Leslie an LFO -- slow or fast -- on the
+ * upper one's tuning and on the volume. */
+void organ(Patch &p, Gen &g)
+{
+    static const int8_t kStop[] = {12, 12, 19, 24, -12};
+    const int st = g.chance(30) ? -12 : 0;
+    p.base(VCO1_TUNE, tune(st));
+    p.base(VCO2_TUNE, tune(st + g.pick(kStop)));
+    p.bases(KBASES(VCO1_WAVE, RAW(kSine), 0x1800, VCO1_VOL, 0x7000, 0xB000, VCO2_WAVE, RAW(kSine), 0x1800,
+                   VCO2_VOL, 0x5000, 0xA000, VOLUME, 0xA800, 0xC000));
+    if (g.chance(50)) {         /* percussion */
+        p.base(VCO2_VOL, 0x1000, 0x4000);
+        p.xenv(VCO2_VOL, KXENV(0, 0, RAW(xdec(120)), RAW(xdec(500)), RAW(norm(0.3)), RAW(norm(0.8))));
+    }
+    if (g.chance(60))           /* key click */
+        p.xenv(TZFM, KXENV(0, 0, RAW(xdec(2)), RAW(xdec(12)), RAW(norm(0.15)), RAW(norm(0.6))));
+    if (g.chance(65)) {         /* Leslie: chorale or tremolo */
+        const unsigned rate = g.chance(50) ? g.range(RAW(lfo_hz(0.6)), RAW(lfo_hz(1.1)))
+                                           : g.range(RAW(lfo_hz(5.5)), RAW(lfo_hz(7.5)));
+        p.xmod(VCO2_FINE, W_SINE, T_LFO, rate, g.range(RAW(norm(0.02)), RAW(norm(0.1))));
+        p.xmod(VOLUME, W_SINE, T_LFO, rate, g.range(RAW(norm(0.03)), RAW(norm(0.15))));
+    }
+    p.filter(KFILTER(RAW(cutoff(105)), RAW(cutoff(140)), 0, 0x3000, kLp, kLp, kFenv0, kFenv0));
+    p.adsr(KADSR(0, RAW(env(4)), RAW(env(200)), RAW(env(600)), RAW(level(0.9)), RAW(level(1.0)), RAW(env(15)), RAW(env(90))));
+}
+
+/* a gong or tam-tam: a low sine and a second one off the harmonics through
+ * the TZFM, as the bell -- but the index, and the filter with it, blooms
+ * after the stroke instead of dying from it (an X-Env with a long attack),
+ * and it rings for seconds.  Half of them with both VCOs FM'd at an
+ * irrational ratio as well: the tam-tam's wash. */
+void gong(Patch &p, Gen &g)
+{
+    const int st = g.chance(50) ? -24 : -12;
+    p.base(VCO2_TUNE, tune(st));
+    p.base(VCO1_TUNE, tune(st + g.irange(4, 20)));
+    p.bases(KBASES(VCO1_FINE, RAW(cents(-90)), RAW(cents(90)), VCO1_WAVE, RAW(kSine), RAW(kTri),
+                   VCO1_VOL, 0x1000, 0x5000, VCO2_WAVE, RAW(kSine), 0x1800, VCO2_VOL, 0x8800, 0xC000,
+                   TZFM, 0, 0x2800, VOLUME, 0xA800, 0xC000));
+    p.xenv(TZFM, KXENV(RAW(xatk(150)), RAW(xatk(1500)), RAW(xdec(1500)), RAW(xdec(5000)), RAW(norm(0.25)), RAW(norm(0.9))));
+    p.filter(KFILTER(RAW(cutoff(80)), RAW(cutoff(110)), 0, 0x4000, kLp, kLp, kFenv0, kFenv0));
+    p.xenv_like(CUTOFF, TZFM);
+    p.set(CUTOFF, XENV_AMT, g.range(RAW(cuts(10)), RAW(cuts(45))));
+    if (g.chance(50))
+        four_op(p, g, RAW(semis(1)), RAW(semis(8)));
+    p.hit(RAW(env(2500)), RAW(env(6500)));
+}
+
+/* the bouncing octave: one held note hops between the root and its octave
+ * -- now and then its fifth or two octaves, in the scale -- on a synced
+ * square: every sixteenth (1/8), every eighth (1/4) or as a trill (1/16).
+ * The pitch sits halfway and the square swings it half the interval each
+ * way.  With the sequencer running the synced square is down first from
+ * the pattern's start (measured in sysemu: at 1/8, steps 1, 3, 5... start
+ * on the root and 2, 4, 6... on the upper note), so a positive depth puts
+ * the root on the beat.  VCO2, when it sounds, stays on the root
+ * underneath; half the time the filter opens on the upper note (the same
+ * sign, so the same half). */
+void bounce(Patch &p, Gen &g)
+{
+    static const uint16_t kHop[][2] = {{12, RAW(semis(6))}, {12, RAW(semis(6))}, {12, RAW(semis(6))},
+                                       {7, RAW(semis(3.5))}, {24, RAW(semis(12))}};
+    static const uint8_t kDiv[] = {D_8, D_8, D_8, D_4, D_4, D_16};
+    const int st = g.chance(60) ? -24 : -12;
+    unsigned h = g.below(5);
+    if (!p.in_scale(st + kHop[h][0]))
+        h = 0;
+    const unsigned div = division(g.pick(kDiv));
+    p.base(VCO1_TUNE, unsigned((57 + st) * 256 + kHop[h][0] * 128));
+    p.xmod(VCO1_TUNE, W_SQUARE, T_SYNCED, div, kHop[h][1]);
+    p.base(VCO1_WAVE, rich(g));
+    p.base(VCO1_VOL, 0x8000, 0xC000);
+    if (g.chance(50)) {
+        p.base(VCO2_TUNE, tune(st));
+        p.bases(KBASES(VCO2_WAVE, RAW(kSine), RAW(kTri), VCO2_VOL, 0x4000, 0x8000));
+    }
+    p.filter(KFILTER(RAW(cutoff(70)), RAW(cutoff(105)), 0x2000, 0x9000, kLp, kLp, RAW(cuts(8)), RAW(cuts(40))));
+    if (g.chance(50))
+        p.xmod(CUTOFF, W_SQUARE, T_SYNCED, div, g.range(RAW(cuts(4)), RAW(cuts(16))));
+    p.adsr(KADSR(0, 0, RAW(env(150)), RAW(env(700)), RAW(level(0.5)), RAW(level(0.95)), RAW(env(30)), RAW(env(200))));
+    p.base(VOLUME, 0xA800, 0xC000);
+}
+
+/* a jaw harp (vargan): a reedy low note that never changes and a mouth
+ * around it -- a resonant filter between band- and low-pass (the drone
+ * stays under the moving peak) whose cutoff twangs at the pluck (an X-Env,
+ * up or down) and then walks the harmonics in time (an LFO, synced or
+ * free, or stepping at random).  The reed drives the filter hard: a
+ * narrow band of one oscillator is quiet. */
+void vargan(Patch &p, Gen &g)
+{
+    static const unsigned kWave[] = {W_SINE, W_TRI, W_TRI, W_SH};
+    p.base(VCO1_TUNE, tune(g.chance(60) ? -24 : -12));
+    p.bases(KBASES(VCO1_WAVE, RAW(kSquare), RAW(kSaw), VCO1_VOL, 0xC000, 0xFFFF, VOLUME, 0xB000, 0xC800));
+    p.filter(KFILTER(RAW(cutoff(84)), RAW(cutoff(104)), 0xB000, 0xE000, 0x2800, 0x6000, kFenv0, kFenv0));
+    if (g.chance(50))
+        p.xenv(CUTOFF, KXENV(0, RAW(xatk(25)), RAW(xdec(80)), RAW(xdec(450)), RAW(cuts(8)), RAW(cuts(24))));
+    else
+        p.xenv(CUTOFF, KXENV(0, RAW(xatk(25)), RAW(xdec(80)), RAW(xdec(450)), RAW(cuts(-24)), RAW(cuts(-8))));
+    const bool sync = g.chance(65);
+    p.xmod(CUTOFF, g.pick(kWave), sync ? T_SYNCED : T_LFO,
+           sync ? division(g.irange(D_4, D_16)) : g.range(RAW(lfo_hz(1.5)), RAW(lfo_hz(7))),
+           g.range(RAW(cuts(4)), RAW(cuts(12))));
+    p.adsr(KADSR(0, 0, RAW(env(400)), RAW(env(1800)), RAW(level(0.35)), RAW(level(0.75)), RAW(env(120)), RAW(env(500))));
+}
+
+/* ---- p69: rumble, brass, flute, bowl -------------------------------------------- */
+
+/* the techno rumble: the low, washy tail of a kick sent through a long
+ * reverb and a low-pass, pumping with the beat.  A low sine or triangle and
+ * a band of noise (VCO2's pitch noised) under a dark low-pass a little over
+ * the sounding pitch, held, and a synced ramp on the volume every quarter
+ * (now and then every eighth): down on the beat, swelling up to the next
+ * (measured in sysemu: a positive depth rises from the step).  The depth is
+ * near full -- the output volume's curve is steep, so a shallow ramp is a
+ * fraction of a dB -- and two times in three the same ramp opens the
+ * filter with the swell; otherwise the filter wanders a step at a time.
+ * Sometimes a TZFM growl. */
+void rumble(Patch &p, Gen &g)
+{
+    static const uint8_t kDiv[] = {D_4, D_4, D_4, D_8};
+    const int st = g.chance(60) ? -24 : -36;
+    p.base(VCO1_TUNE, tune(st));
+    p.base(VCO2_TUNE, tune(st + 12 + g.irange(0, 24)));
+    p.bases(KBASES(VCO1_WAVE, RAW(kSine), RAW(kTri), VCO1_VOL, 0xA000, 0xE000, VCO2_WAVE, RAW(kTri), RAW(kSaw),
+                   VCO2_VOL, 0x5000, 0xA000, RESO, 0x3000, 0x9000, COLOR, kLp, kLp, FENV, kFenv0, RAW(cuts(20)),
+                   VOLUME, 0xB000, 0xC800));
+    p.noise(VCO2_TUNE, RAW(semis(30)), RAW(semis(90)));
+    /* (pitch + 12) - (note - 57), 6..30 st over VCO1 */
+    p.base(CUTOFF, unsigned((st + 69 + g.irange(6, 30)) * 256));
+    const unsigned div = division(g.pick(kDiv));
+    p.xmod(VOLUME, W_SAW, T_SYNCED, div, g.range(RAW(norm(0.85)), RAW(norm(1.0))));
+    if (g.chance(65))
+        p.xmod(CUTOFF, W_SAW, T_SYNCED, div, g.range(RAW(cuts(6)), RAW(cuts(20))));
+    else
+        p.xmod(CUTOFF, W_SH, T_SYNCED, division(D_16), g.range(RAW(cuts(4)), RAW(cuts(14))));
+    if (g.chance(30))
+        p.base(TZFM, 0x1000, 0x4000);
+    p.adsr(KADSR(0, RAW(env(5)), RAW(env(600)), RAW(env(2500)), RAW(level(0.6)), RAW(level(0.95)), RAW(env(300)), RAW(env(1500))));
+}
+
+/* synth brass: saws -- two, detuned, or the second a fifth or an octave
+ * away -- into a low-pass that the shared envelope blats open (ENV AMOUNT
+ * far up) and settles; both VCOs scoop up into the note.  A blat (20-80 ms
+ * attack), a stab (short, little sustain) or a section swell (slow); now
+ * and then a vibrato on the detune. */
+void brass(Patch &p, Gen &g)
+{
+    static const int8_t kOct[] = {-12, -12, 0, 0, 0};
+    static const int kInterval[] = {0, 0, 0, 12, 7, -12};
+    const int st = g.pick(kOct), iv = p.interval(st, kInterval);
+    p.base(VCO1_TUNE, tune(st));
+    p.base(VCO2_TUNE, tune(st + iv));
+    p.bases(KBASES(VCO1_WAVE, 0xE000, RAW(kSaw), VCO1_VOL, 0x7000, 0xB000, VCO2_FINE, RAW(cents(-18)), RAW(cents(18)),
+                   VCO2_WAVE, 0xE000, RAW(kSaw), VCO2_VOL, 0x6000, 0xA800, VOLUME, 0xA800, 0xC000));
+    p.filter(KFILTER(RAW(cutoff(66)), RAW(cutoff(92)), 0x1000, 0x6000, kLp, kLp, RAW(cuts(30)), RAW(cuts(70))));
+    switch (g.below(4)) {
+    case 0:     /* a stab */
+        p.adsr(KADSR(RAW(env(3)), RAW(env(15)), RAW(env(120)), RAW(env(400)), RAW(level(0.15)), RAW(level(0.4)), RAW(env(60)), RAW(env(250))));
+        break;
+    case 1:     /* a section swell */
+        p.adsr(KADSR(RAW(env(150)), RAW(env(380)), RAW(env(600)), RAW(env(2000)), RAW(level(0.6)), RAW(level(0.9)), RAW(env(200)), RAW(env(700))));
+        break;
+    default:    /* a blat */
+        p.adsr(KADSR(RAW(env(20)), RAW(env(80)), RAW(env(250)), RAW(env(900)), RAW(level(0.45)), RAW(level(0.8)), RAW(env(80)), RAW(env(400))));
+        break;
+    }
+    p.xenv(VCO1_TUNE, KXENV(0, 0, RAW(xdec(25)), RAW(xdec(90)), RAW(semis(-2.5)), RAW(semis(-0.6))));
+    p.xenv_like(VCO2_TUNE, VCO1_TUNE);
+    if (g.chance(30))
+        p.xmod(VCO1_FINE, W_SINE, T_LFO, g.range(RAW(lfo_hz(4.5)), RAW(lfo_hz(6.5))), g.range(RAW(norm(0.04)), RAW(norm(0.12))));
+}
+
+/* flute and pan flute: a soft tone (sine to triangle) with breath -- VCO2,
+ * noised, loud for the chiff at the start and a little under the note
+ * after; the tone breathes in (25-70 ms) and its vibrato comes late (an
+ * X-Env fades the LFO's depth in).  The pan flute is hollower: the filter
+ * towards band-pass, more breath. */
+void flute(Patch &p, Gen &g)
+{
+    static const int8_t kOct[] = {0, 0, 12, 12, 24};
+    const int st = g.pick(kOct);
+    const bool pan = g.chance(40);
+    p.base(VCO1_TUNE, tune(st));
+    p.base(VCO2_TUNE, tune(st + 24));
+    p.bases(KBASES(VCO1_WAVE, RAW(kSine), RAW(kTri) - 0x1800, VCO1_VOL, 0x8000, 0xC000, VCO2_WAVE, RAW(kTri), RAW(kSaw),
+                   VOLUME, 0xA800, 0xC000));
+    p.noise(VCO2_TUNE, RAW(semis(40)), RAW(semis(100)));
+    p.base(VCO2_VOL, pan ? 0x2000u : 0x0800u, pan ? 0x4800u : 0x2800u);
+    p.xenv(VCO2_VOL, KXENV(0, 0, RAW(xdec(30)), RAW(xdec(120)), RAW(norm(0.3)), RAW(norm(0.7))));
+    if (pan)
+        p.filter(KFILTER(RAW(cutoff(95)), RAW(cutoff(125)), 0x2000, 0x6000, 0x2800, 0x5800, kFenv0, RAW(cuts(15))));
+    else
+        p.filter(KFILTER(RAW(cutoff(100)), RAW(cutoff(135)), 0, 0x3000, kLp, kLp, kFenv0, RAW(cuts(15))));
+    p.adsr(KADSR(RAW(env(25)), RAW(env(70)), RAW(env(300)), RAW(env(1500)), RAW(level(0.7)), RAW(level(0.95)), RAW(env(60)), RAW(env(250))));
+    p.xmod(VCO1_TUNE, W_SINE, T_LFO, g.range(RAW(lfo_hz(4.5)), RAW(lfo_hz(6))), 0x8000);
+    p.set(VCO1_TUNE, XENV_DEST, 1);
+    p.xenv(VCO1_TUNE, KXENV(RAW(xatk(150)), RAW(xatk(700)), RAW(xdec(2500)), RAW(xdec(5000)), RAW(semis(0.1)), RAW(semis(0.4))));
+}
+
+/* a singing bowl: two sines close together, beating slowly as a bowl's
+ * paired modes do (VCO2 a few cents off VCO1), or the bowl's second mode
+ * high over the first (about 2.7x, 16-18 st, off the grid); a slow tremolo
+ * on the volume is the bowl's wah.  Struck (rings for seconds) or rubbed
+ * (swells in and sings while held). */
+void bowl(Patch &p, Gen &g)
+{
+    static const int8_t kOct[] = {0, 0, 12, 12, 24};
+    const int st = g.pick(kOct);
+    p.base(VCO1_TUNE, tune(st));
+    p.bases(KBASES(VCO1_WAVE, RAW(kSine), 0x0C00, VCO1_VOL, 0x8000, 0xC000, VCO2_WAVE, RAW(kSine), 0x0C00,
+                   VOLUME, 0xA800, 0xC000));
+    if (g.chance(60)) {
+        p.base(VCO2_TUNE, tune(st));
+        const bool up = g.chance(50);
+        p.base(VCO2_FINE, up ? RAW(cents(3)) : RAW(cents(-14)), up ? RAW(cents(14)) : RAW(cents(-3)));
+        p.base(VCO2_VOL, 0x7000, 0xB000);
+    } else {
+        p.base(VCO2_TUNE, tune(st + g.irange(16, 18)));
+        p.bases(KBASES(VCO2_FINE, RAW(cents(-40)), RAW(cents(40)), VCO2_VOL, 0x3000, 0x7000));
+    }
+    p.xmod(VOLUME, W_SINE, T_LFO, g.range(RAW(lfo_hz(0.4)), RAW(lfo_hz(2.5))), g.range(RAW(norm(0.04)), RAW(norm(0.2))));
+    p.filter(KFILTER(RAW(cutoff(115)), RAW(cutoff(149)), 0, 0x2000, kLp, kLp, kFenv0, kFenv0));
+    if (g.chance(65))
+        p.hit(RAW(env(2500)), RAW(env(6500)));
+    else
+        p.adsr(KADSR(RAW(env(200)), RAW(env(1200)), RAW(env(3000)), RAW(env(6500)), RAW(level(0.7)), RAW(level(1.0)), RAW(env(1500)), RAW(env(6500))));
+}
+
+/* ---- p70: two deep basses ---------------------------------------------------- */
+
+/* the lowest a bass's VCO may go: st from the played note, an octave up
+ * while it would sound under C1 (MIDI 24) */
+int floor_c1(const Patch &p, int st)
+{
+    while (p.cx->played + st < 24)
+        st += 12;
+    return st;
+}
+
+/* a sub bass: a sine (now and then towards a triangle) two or three octaves
+ * under the note; for small speakers its octave or twelfth quietly on VCO2;
+ * now and then a short pitch drop at the start; held, or a long decay */
+void sub(Patch &p, Gen &g)
+{
+    const int st = floor_c1(p, g.chance(55) ? -36 : -24);
+    p.base(VCO1_TUNE, tune(st));
+    p.bases(KBASES(VCO1_WAVE, RAW(kSine), 0x2800, VCO1_VOL, 0xB000, 0xF000, RESO, 0, 0x2000, COLOR, kLp, kLp,
+                   VOLUME, 0xB000, 0xC800));
+    p.base(CUTOFF, unsigned((st + 69 + g.irange(12, 36)) * 256));
+    if (g.chance(45)) {
+        p.base(VCO2_TUNE, tune(st + (g.chance(70) ? 12 : 19)));
+        p.bases(KBASES(VCO2_WAVE, RAW(kSine), RAW(kTri), VCO2_VOL, 0x1800, 0x4000));
+    }
+    if (g.chance(40)) {
+        p.xenv(VCO1_TUNE, KXENV(0, 0, RAW(xdec(15)), RAW(xdec(80)), RAW(semis(3)), RAW(semis(12))));
+        p.xenv_like(VCO2_TUNE, VCO1_TUNE);
+    }
+    if (g.chance(60))
+        p.adsr(KADSR(0, RAW(env(5)), RAW(env(300)), RAW(env(1500)), RAW(level(0.8)), RAW(level(1.0)), RAW(env(40)), RAW(env(300))));
+    else
+        p.hit(RAW(env(300)), RAW(env(1500)));
+}
+
+/* a deep bass, round and dark -- the dub and deep-house bass: a square or
+ * saw under a low low-pass that a short envelope plucks open, a sine an
+ * octave under it on VCO2 */
+void deep(Patch &p, Gen &g)
+{
+    static const int8_t kOct[] = {-24, -24, -12};
+    const int st = floor_c1(p, g.pick(kOct) - 12) + 12;
+    p.base(VCO1_TUNE, tune(st));
+    p.base(VCO2_TUNE, tune(st - 12));
+    p.bases(KBASES(VCO1_WAVE, RAW(kSquare), RAW(kSaw), VCO1_VOL, 0x7000, 0xB000, VCO2_WAVE, RAW(kSine), 0x1800,
+                   VCO2_VOL, 0x7000, 0xB800, RESO, 0x1000, 0x6000, COLOR, kLp, kLp, FENV, RAW(cuts(15)), RAW(cuts(45)),
+                   VOLUME, 0xB000, 0xC800));
+    p.base(CUTOFF, unsigned((st + 69 + g.irange(0, 18)) * 256));
+    p.adsr(KADSR(0, RAW(env(3)), RAW(env(150)), RAW(env(600)), RAW(level(0.3)), RAW(level(0.7)), RAW(env(40)), RAW(env(250))));
+}
+
 /* ---- p42: spice ---------------------------------------------------------------
  * After a bass or tonal recipe, none to three of the knobs a player would
  * reach for next: an LFO or an X-Env on the cutoff, a TZFM bite, a drifting
@@ -2146,29 +2439,35 @@ enum Group : uint16_t {
 struct Entry {
     void (*make)(Patch &, Gen &);
     uint8_t weight;
-    uint8_t level;      /* p50/p51: the output level, x/64 (see leveled) */
+    uint8_t level;      /* p71: the instrument's gain in dB at zero features, 8 x dB + 64 (see leveled) */
     uint16_t group;
 };
 const Entry kCatalogue[] = {
-    {kick, 12, 85, G_KICK}, {snare, 9, 85, G_HATS}, {clap, 6, 100, G_HATS},
-    {hat_closed, 9, 100, G_HATS}, {hat_open, 5, 31, G_HATS}, {tom, 5, 47, G_DRUMS},
-    {perc, 4, 78, G_DRUMS}, {bass, 9, 37, G_DEEP}, {acid, 5, 52, G_BASS}, {lead, 4, 28, G_TONAL},
-    {pad, 4, 42, G_TONAL}, {pluck, 5, 46, G_TONAL | G_PLUCK}, {bell, 4, 21, G_TONAL | G_PLUCK}, {zap, 4, 100, G_ZAP},
-    {stab, 4, 31, G_TONAL | G_PLUCK}, {glitch, 5, 69, G_ZAP},
+    {kick, 12, 163, G_KICK}, {snare, 9, 147, G_HATS}, {clap, 6, 147, G_HATS},
+    {hat_closed, 9, 166, G_HATS}, {hat_open, 5, 138, G_HATS}, {tom, 5, 175, G_DRUMS},
+    {perc, 4, 158, G_DRUMS}, {bass, 9, 152, G_DEEP}, {acid, 5, 168, G_BASS}, {lead, 4, 144, G_TONAL},
+    {pad, 4, 130, G_TONAL}, {pluck, 5, 162, G_TONAL | G_PLUCK}, {bell, 4, 126, G_TONAL | G_PLUCK}, {zap, 4, 180, G_ZAP},
+    {stab, 4, 131, G_TONAL | G_PLUCK}, {glitch, 5, 128, G_ZAP},
     /* p39 */
-    {cymbal, 4, 23, G_DRUMS}, {shaker, 4, 100, G_DRUMS}, {drop, 3, 100, G_DRUMS},
-    {fm_bass, 6, 27, G_DEEP | G_FM}, {reese, 4, 18, G_DEEP}, {wobble, 5, 21, G_BASS},
-    {growl, 4, 22, G_BASS}, {sync_lead, 4, 43, G_TONAL}, {hoover, 3, 16, G_TONAL},
-    {phaser_pad, 3, 35, G_TONAL}, {gate, 4, 17, G_TONAL}, {fm_ep, 4, 19, G_TONAL | G_PLUCK},
-    {mallet, 4, 23, G_TONAL | G_PLUCK}, {bleeps, 4, 21, G_ZAP}, {riser, 3, 33, G_OTHER}, {siren, 3, 17, G_OTHER},
-    {drone, 3, 55, G_TONAL},
+    {cymbal, 4, 135, G_DRUMS}, {shaker, 4, 133, G_DRUMS}, {drop, 3, 220, G_DRUMS},
+    {fm_bass, 6, 146, G_DEEP | G_FM}, {reese, 4, 148, G_DEEP}, {wobble, 5, 172, G_BASS},
+    {growl, 4, 161, G_BASS}, {sync_lead, 4, 126, G_TONAL}, {hoover, 3, 115, G_TONAL},
+    {phaser_pad, 3, 165, G_TONAL}, {gate, 4, 109, G_TONAL}, {fm_ep, 4, 145, G_TONAL | G_PLUCK},
+    {mallet, 4, 116, G_TONAL | G_PLUCK}, {bleeps, 4, 139, G_ZAP}, {riser, 3, 189, G_OTHER}, {siren, 3, 124, G_OTHER},
+    {drone, 3, 185, G_TONAL},
     /* p43 */
-    {metal_perc, 4, 58, G_DRUMS}, {am_bell, 3, 22, G_TONAL | G_PLUCK}, {talk, 3, 50, G_TONAL},
-    {wind, 2, 100, G_OTHER}, {crackle, 2, 49, G_OTHER}, {bass808, 5, 19, G_DEEP},
+    {metal_perc, 4, 148, G_DRUMS}, {am_bell, 3, 137, G_TONAL | G_PLUCK}, {talk, 3, 133, G_TONAL},
+    {wind, 2, 223, G_OTHER}, {crackle, 2, 122, G_OTHER}, {bass808, 5, 163, G_DEEP},
     /* p54 */
-    {cowbell, 3, 100, G_DRUMS}, {rim, 4, 100, G_DRUMS}, {conga, 4, 49, G_DRUMS}, {chord, 4, 42, G_TONAL | G_PLUCK},
+    {cowbell, 3, 110, G_DRUMS}, {rim, 4, 171, G_DRUMS}, {conga, 4, 163, G_DRUMS}, {chord, 4, 128, G_TONAL | G_PLUCK},
     /* p64 */
-    {syncussion, 4, 56, G_SYN},
+    {syncussion, 4, 169, G_SYN},
+    /* p66 */
+    {organ, 4, 78, G_TONAL}, {gong, 3, 147, G_TONAL | G_PLUCK}, {bounce, 4, 137, G_BASS}, {vargan, 3, 158, G_TONAL},
+    /* p69 */
+    {rumble, 3, 157, G_DEEP | G_OTHER}, {brass, 4, 134, G_TONAL}, {flute, 3, 98, G_TONAL}, {bowl, 3, 123, G_TONAL | G_PLUCK},
+    /* p70 */
+    {sub, 4, 184, G_DEEP}, {deep, 4, 153, G_DEEP},
 };
 constexpr unsigned kInstruments = sizeof kCatalogue / sizeof kCatalogue[0];
 
@@ -2189,15 +2488,15 @@ struct Style {
 };
 const Style kStyle[] = {
     /* techno  */ {{-12, 0}, {-2, 6}, {0, 24},
-                  {0x3C, 0x96, 0x46, 0x65, 0x12, 0x21, 0x31, 0x35, 0x34, 0x51, 0x14, 0x12, 0x13, 0x03, 0x20, 0x02, 0x41, 0x01, 0x10, 0x21, 0x15, 0x24}},
+                  {0x3C, 0x96, 0x46, 0x65, 0x12, 0x21, 0x31, 0x35, 0x34, 0x51, 0x14, 0x12, 0x13, 0x03, 0x20, 0x02, 0x41, 0x01, 0x10, 0x21, 0x15, 0x24, 0x11, 0x12, 0x15, 0x00, 0x23}},
     /* dub     */ {{4, 20}, {-10, -2}, {-16, 0},
-                  {0x38, 0x54, 0x25, 0x93, 0x10, 0x23, 0x11, 0x12, 0x42, 0x22, 0x23, 0x00, 0x30, 0x22, 0x12, 0x42, 0x13, 0x02, 0x33, 0x02, 0x26, 0x4C}},
+                  {0x38, 0x54, 0x25, 0x93, 0x10, 0x23, 0x11, 0x12, 0x42, 0x22, 0x23, 0x00, 0x30, 0x22, 0x12, 0x42, 0x13, 0x02, 0x33, 0x02, 0x26, 0x4C, 0x13, 0x21, 0x32, 0x12, 0x45}},
     /* acid    */ {{-8, 4}, {0, 8}, {8, 28},
-                  {0x3C, 0x96, 0x35, 0x43, 0x2E, 0x21, 0x40, 0x23, 0x24, 0x21, 0x21, 0x24, 0x02, 0x02, 0x20, 0x12, 0x20, 0x10, 0x00, 0x21, 0x13, 0x11}},
+                  {0x3C, 0x96, 0x35, 0x43, 0x2E, 0x21, 0x40, 0x23, 0x24, 0x21, 0x21, 0x24, 0x02, 0x02, 0x20, 0x12, 0x20, 0x10, 0x00, 0x21, 0x13, 0x11, 0x00, 0x13, 0x13, 0x00, 0x11}},
     /* electro */ {{-12, -2}, {2, 8}, {-4, 16},
-                  {0x8A, 0x96, 0x54, 0x44, 0x32, 0x21, 0x61, 0x32, 0x22, 0x52, 0x31, 0x41, 0x01, 0x11, 0x51, 0x11, 0x30, 0x51, 0x00, 0x68, 0x44, 0x41}},
+                  {0x8A, 0x96, 0x54, 0x44, 0x32, 0x21, 0x61, 0x32, 0x22, 0x52, 0x31, 0x41, 0x01, 0x11, 0x51, 0x11, 0x30, 0x51, 0x00, 0x68, 0x44, 0x41, 0x01, 0x15, 0x31, 0x01, 0x13}},
     /* ambient */ {{8, 24}, {-6, 2}, {-16, -4},
-                  {0x02, 0x21, 0x12, 0x33, 0x30, 0x5A, 0x06, 0x21, 0x32, 0x11, 0x03, 0x10, 0x60, 0x52, 0x26, 0x03, 0x28, 0x15, 0x45, 0x00, 0x12, 0x14}},
+                  {0x02, 0x21, 0x12, 0x33, 0x30, 0x5A, 0x06, 0x21, 0x32, 0x11, 0x03, 0x10, 0x60, 0x52, 0x26, 0x03, 0x28, 0x15, 0x45, 0x00, 0x12, 0x14, 0x42, 0x20, 0x12, 0x53, 0x12}},
 };
 constexpr unsigned kStyles = sizeof kStyle / sizeof kStyle[0];
 
@@ -2213,29 +2512,62 @@ const Style *stored_style()
     return s && s <= kStyles ? &kStyle[s - 1u] : nullptr;
 }
 
-/* p50: the instruments level with one another.  The bench (tools/bench, the
- * firmware in sysemu, a digital voice after it) renders 300 ms notes; their
- * K-weighted momentary loudness (BS.1770, 400 ms, the maximum).  p51: nine draws of each instead of three,
- * and the median alone hid the loud draws -- a wide-spread instrument's
- * typical patch sat at the target while a third of them stood 8 dB over it.
- * Now the level puts the middle of the median and the energy mean at -29
- * LU, with the energy mean at most -26.5 (the kick's -27.4, which stays at
- * full volume: the reference), and no boost past 100 (VOLUME's headroom;
- * the quiet drums and FX are at full volume already).  Applied to the
- * output volume, which the VCA follows linearly -- all of it: p50 scaled
- * the base alone, and the gate (a synced X-Mod on VOLUME nearly full
- * depth over a low base) came out 3 dB louder for a 9 dB cut.  The depths
- * are cubic, so they take the cube root of the factor. */
+/* p50/p51: the instruments level with one another -- one level each, from
+ * bench renders.  p71 LV2: that was not enough.  A survey on the bench
+ * (1,296 forced draws, 24 of every instrument; loudness = the mean of the
+ * K-weighted maxima over 100 ms and 400 ms) put the spread inside an
+ * instrument at 6.7 dB std against 3.5 between instruments: draws of one
+ * recipe differ by more than recipes do.  Now the level comes from the
+ * patch itself: a linear model of nine knob values predicts its loudness
+ * at full VOLUME -- the louder heard VCO's level, ENV AMOUNT up, the colour
+ * towards band-pass, the decay, sustain and attack (six knob values: three
+ * more -- both VCOs heard, the cutoff over the pitch, high-pass -- took the
+ * spread only from 5.8 to 5.7 dB) -- and Entry::level holds the instrument's
+ * own term (its gain in dB at zero features, 8 x dB + 64).  VOLUME is set
+ * so the prediction meets one target (never over full), and VOLUME's X-Mod
+ * and X-Env depths follow the base by the cube root of the gain (depths are
+ * cubic), as p51's did.  Cross-validated on the survey: spread 7.7 -> 5.8
+ * dB std, 10..90 % range 16.8 -> 12.6 dB, draws 10+ dB over / 15+ dB under
+ * the median 3 % / 5 % -> 1 % / 3 %, the generator ~3 dB quieter overall
+ * (the room to lift the quiet ones).  The VCA follows VOLUME linearly
+ * (bench: each halving -6.0 dB). */
+/* dB x 2^24 per raw unit: the louder heard VCO's level, ENV AMOUNT over
+ * centre, COLOR under centre (towards band-pass), DECAY, SUSTAIN, ATTACK */
+const int16_t kLoudW[6] = {3338, 2191, -4136, 5504, 928, -4916};
+bool sounds(const Patch &p, unsigned vol);
+
+/* 2^x for x <= 0 */
+float exp2_down(float x)
+{
+    const int i = int(x) - 1;
+    const float f = x - float(i);
+    union { float f; uint32_t u; } b;
+    b.u = uint32_t(i + 127) << 23;
+    return b.f * (1.f + f * (0.6931472f + f * (0.2402265f + f * 0.0555041f)));
+}
+
 void leveled(Patch &p, unsigned what)
 {
-    uint16_t *v = p.v[VOLUME];
-    const float k = kCatalogue[what].level * (1.f / 64);
+    auto &v = p.v;
+    int lvl = 0;
+    for (unsigned vol = VCO1_VOL; vol <= VCO2_VOL; vol += VCO2_VOL - VCO1_VOL)
+        if (sounds(p, vol) && v[vol][BASE] > lvl)
+            lvl = v[vol][BASE];
+    const int fenv = int(v[FENV][BASE]) - 0x8000, bp = 0x8000 - int(v[COLOR][BASE]);
+    /* the gain VOLUME needs, dB x 2^24: the instrument's own term less the
+     * patch's predicted loudness */
+    const int x = (int(kCatalogue[what].level) - 64) * (1 << 21) -
+                  (kLoudW[0] * lvl + kLoudW[1] * (fenv > 0 ? fenv : 0) + kLoudW[2] * (bp > 0 ? bp : 0) +
+                   kLoudW[3] * int(v[DECAY][BASE]) + kLoudW[4] * int(v[SUSTAIN][BASE]) + kLoudW[5] * int(v[ATTACK][BASE]));
+    const float vol = x < 0 ? exp2_down(float(x) * (1.f / (6.0206f * 16777216.f))) : 1.f;
+    uint16_t *vv = v[VOLUME];
+    const float k = vol * 65535.f / float(vv[BASE] ? vv[BASE] : 1u);
     float c = 1.f;
-    for (unsigned i = 0; i < 5u; ++i)
+    for (unsigned i = 0; i < 6u; ++i)
         c = (2.f * c + k / (c * c)) * (1.f / 3);
-    v[BASE] = uint16_t(clamp16(int(float(v[BASE]) * k)));
+    vv[BASE] = uint16_t(clamp16(int(vol * 65535.f + 0.5f)));
     for (unsigned l = XMOD_AMT; l <= XENV_AMT; l += XENV_AMT - XMOD_AMT)
-        v[l] = uint16_t(clamp16(0x8000 + int(float(int(v[l]) - 0x8000) * c)));
+        vv[l] = uint16_t(clamp16(0x8000 + int(float(int(vv[l]) - 0x8000) * c)));
 }
 
 /* by weight among the instruments in `groups` (0: all of them); p55: the
@@ -2507,11 +2839,17 @@ float up_st(unsigned raw)
     return x > 0.f ? 149.f * x * x * x : 0.f;
 }
 
+/* a VCO is heard: its level up, or an X-Env lifting it, or an X-Mod moving it */
+bool sounds(const Patch &p, unsigned vol)
+{
+    const auto *v = p.v[vol];
+    return v[BASE] >= 0x1800u || v[XENV_AMT] > 0x8000u || v[XMOD_AMT] != 0x8000u;
+}
+
 bool mute(const Patch &p)
 {
     const auto &v = p.v;
-    const bool s1 = v[VCO1_VOL][BASE] >= 0x1800u || v[VCO1_VOL][XENV_AMT] > 0x8000u || v[VCO1_VOL][XMOD_AMT] != 0x8000u;
-    const bool s2 = v[VCO2_VOL][BASE] >= 0x1800u || v[VCO2_VOL][XENV_AMT] > 0x8000u || v[VCO2_VOL][XMOD_AMT] != 0x8000u;
+    const bool s1 = sounds(p, VCO1_VOL), s2 = sounds(p, VCO2_VOL);
     if (!s1 && !s2)
         return v[RESO][BASE] < 0xF000u;
     if (v[COLOR][BASE] > 0x9000u)
@@ -2526,10 +2864,48 @@ bool mute(const Patch &p)
         pitch = v[VCO2_TUNE][BASE];
     const unsigned xm = v[CUTOFF][XMOD_AMT];          /* either sign opens it half the cycle */
     const float open = up_st(v[FENV][BASE]) + up_st(v[CUTOFF][XENV_AMT]) + up_st(xm > 0x8000u ? xm : 0x10000u - xm);
-    return float(v[CUTOFF][BASE]) + open * 256.f < float(pitch - 6 * 256);
+    /* the cutoff coordinate sits 12 st over a VCO tune's (cutoff raw =
+     * (st + 69 + k) * 256 puts it k st over a VCO at tune (57 + st) * 256),
+     * so "more than 6 st under the pitch" is raw cutoff + open under tune +
+     * 6 st.  p71: until p70 this read tune - 6 st, i.e. 18 st under. */
+    return float(v[CUTOFF][BASE]) + open * 256.f < float(pitch + 6 * 256);
 }
 
 void season(Patch &p, const Kit &k);
+
+/* p70 DB: deeper basses (the user: they are all not deep enough).  After a
+ * bass's recipe a draw takes some lower: 20 % a whole octave down; 15 %
+ * keep their note and get a sine an octave under VCO1 on VCO2, when VCO2 is
+ * free (silent, no TZFM, no sync, nothing on its pitch; else they go an
+ * octave down); 10 % a fifth down -- the line then plays a fifth lower,
+ * so not on a bass kit's key, which plays a degree (an octave there).  The
+ * cutoff moves with the VCOs, so the timbre stays.  Nothing sounds under
+ * C1 (MIDI 24): a move that would take it there is not made. */
+void deepen(Patch &p, Gen &g, const Context &cx)
+{
+    auto &v = p.v;
+    const unsigned u = g.below(100);
+    if (u >= 45u)
+        return;
+    int low = 127;
+    for (unsigned vco = 0; vco < 2u; ++vco)
+        if (sounds(p, VCO1_VOL + 4u * vco)) {
+            const int n = cx.played + int(v[VCO1_TUNE + 4u * vco][BASE] >> 8) - 57;
+            low = n < low ? n : low;
+        }
+    if (u < 15u && sounds(p, VCO1_VOL) && !sounds(p, VCO2_VOL) && !v[TZFM][BASE] && !v[SYNC][BASE] &&
+        untouched(p, VCO2_TUNE) && low >= 36) {
+        p.base(VCO2_TUNE, v[VCO1_TUNE][BASE] - 12u * 256u);
+        p.bases(KBASES(VCO2_WAVE, RAW(kSine), 0x1000, VCO2_VOL, 0x5000, 0x9000));
+        return;
+    }
+    const int shift = u >= 35u && !cx.degree ? 7 : 12;
+    if (low - shift < 24)
+        return;
+    static const uint8_t kMoved[] = {VCO1_TUNE, VCO2_TUNE, CUTOFF};
+    for (unsigned slot : kMoved)
+        v[slot][BASE] = uint16_t(clamp16(int(v[slot][BASE]) - shift * 256));
+}
 
 /* instrument `what`, built for cx: its recipe, and a bass or tonal one
  * gets the spice; p54: drawn again (up to five times) while mute(), then
@@ -2546,6 +2922,8 @@ void instrument(Patch &p, Gen &g, Context &cx, unsigned what)
         if (cx.kit)
             season(p, *cx.kit);
         deeper_fm(p);
+        if (kCatalogue[what].group & (G_DEEP | G_BASS))
+            deepen(p, g, cx);
         if (tries == 5u || !mute(p))
             break;
         diag(D_MNRAND_MUTED) += 1u;
@@ -2657,7 +3035,8 @@ void generate_kit(void *mgr, unsigned tag, unsigned page)
 
 /* K2: a bass kit over the page, in the pattern's scale.  A different bass
  * on every key (p46; p45 gave all eight one recipe): each key draws its own
- * by weight, none twice until all seven basses are on the page.  Each key
+ * by weight, none twice until all the basses are on the page (p66: eight,
+ * one a key).  Each key
  * is a degree of the scale up from the root -- C the root, D the second,
  * ..., C' the octave, a scale of fewer notes carrying on into the next
  * octave; no scale: C major, each key its own note -- and its bass is
@@ -2672,6 +3051,7 @@ void generate_bass_kit(void *mgr, unsigned tag, unsigned page)
     Kit kit;
     draw_kit(kit, g, st);
     Context cx = context(mgr, 60, st ? &kit : nullptr);
+    cx.degree = 1;
     unsigned mask = cx.scale, root = cx.root;
     if (!mask) {
         mask = 0xAB5u;                          /* C major */
@@ -2695,6 +3075,14 @@ void generate_bass_kit(void *mgr, unsigned tag, unsigned page)
         unsigned what = pick(g, G_DEEP | G_BASS, 0u, st);
         for (unsigned tries = 0; (used >> what & 1u) && tries < 24u; ++tries)
             what = pick(g, G_DEEP | G_BASS, 0u, st);
+        /* p66: eight basses for eight keys -- the last one is long odds for
+         * the draw, so take whichever is left (of the style's, if any) */
+        if ((used >> what & 1u) && !diag(D_MNRAND_FORCE))
+            for (unsigned i = 0; i < kInstruments; ++i)
+                if ((kCatalogue[i].group & (G_DEEP | G_BASS)) && !(used >> i & 1u) && weight(st, i)) {
+                    what = i;
+                    break;
+                }
         used |= uint64_t(1) << what;
         cx.played = pitch;
         Patch p;

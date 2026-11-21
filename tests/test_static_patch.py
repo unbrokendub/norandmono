@@ -52,7 +52,8 @@ def expect_branch(image, md, address, mnemonic, target):
 
 def main():
     stock = (ROOT / "build/firmware.bin").read_bytes()
-    image = (ROOT / "build/firmware-patched.bin").read_bytes()
+    image_path = ROOT / "build/firmware-patched.bin"
+    image = image_path.read_bytes()
     syx = (ROOT / "build/mono_V2.2.0r-patched.syx").read_bytes()
 
     if len(stock) != STOCK_SIZE:
@@ -268,6 +269,14 @@ def main():
         expect_branch(image, md, 0x08117594, 'b', noteoff_entry & ~1)
     else:
         expect_bytes(image, 0x08117594, at(stock, 0x08117594, 4), 'CH off: note-off prologue stock')
+    # KB: the key scanner's edges with hysteresis (stock with --no-key-debounce)
+    scan_press, scan_release = struct.unpack_from('<2I', image, blob_off + 0x1FC)
+    if at(image, 0x0810F62A, 4) != at(stock, 0x0810F62A, 4):
+        expect_branch(image, md, 0x0810F62A, 'bl', scan_press & ~1)
+        expect_bytes(image, 0x0810F62E, bytes.fromhex('00bf'), 'KB: nop after the press call')
+        expect_branch(image, md, 0x0810F638, 'bl', scan_release & ~1)
+        for address in (0x0810F630, 0x0810F63C):                  # the beq's that take the edges
+            expect_bytes(image, address, at(stock, address, 2), 'KB: stock beq after the call')
     # R1: the mod-note randomizer builds instruments (stock with --no-smart-random)
     modnote_random = struct.unpack_from('<I', image, blob_off + 0x1B8)[0]
     if at(image, 0x0814476C, 4) != at(stock, 0x0814476C, 4):
@@ -436,6 +445,8 @@ def main():
              (0x081199AE, 4), (0x08124166, 4), (0x08124362, 4), (0x0812436E, 4),
              # RG: the rotate setup's tail call
              (0x08145EE0, 4),
+             # KB: the key scanner's press and release edge tests
+             (0x0810F62A, 6), (0x0810F638, 4),
              (0x0814F05E, 1), (0x0814F0D0, 1), (0x0814F1E6, 1), (0x0814F28E, 1),
              (0x0814F33E, 1), (0x0814F0F0, 1),
              (0x08109DF4, 4), (0x0814F80C, 4), (0x08157324, 4), (0x08157528, 4),
@@ -444,6 +455,39 @@ def main():
              (0x081591D4, 4), (0x0815E8D6, 2), (0x0815EA38, 4))
     if ev_log:                                    # EV: the X-Env trigger, logged
         spans = spans + ((0x08156074, 6),)
+    # HL/HM: code of ours in stock code the patches leave unreachable.  The
+    # build's manifest names each hole it filled; each holds its linker
+    # section, then udf.  The stock randomizer's body has its own checks:
+    # its one caller is the thunk's bl to its entry, which stays a branch.
+    import json
+    holes = json.loads(Path(str(image_path) + '.holes.json').read_text())
+    for row in holes:
+        base, end = row['base'], row['end']
+        code = bytes.fromhex(row['code'])
+        if len(code) > end - base or len(code) & 1:
+            fail("0x%08X: %d bytes in a %d-byte hole" % (base, len(code), end - base))
+        expect_bytes(image, base, code, 'HL/HM: %s holds its section' % row['what'])
+        fill = at(image, base + len(code), end - base - len(code))
+        if fill != b'\xff\xde' * (len(fill) // 2):
+            fail("0x%08X: the hole's spare bytes are not udf" % base)
+        spans = spans + ((base, end - base),)
+    filled = {row['base'] for row in holes}
+    if 0x08144770 in filled:
+        for address in (0x08144CBC, 0x0811EC7E):          # the next function, the one caller
+            expect_bytes(image, address, at(stock, address, 4), 'HL: stock around the hole')
+        expect_branch(image, md, 0x0811EC7E, 'bl', 0x0814476C)
+        expect_branch(image, md, 0x0814476C, 'b', modnote_random & ~1)
+    # a hole is filled only with the patch that makes it dead: its entry
+    # branches into the blob, or its one caller was redirected
+    entry_of = {0x0811A904: (0x08119A2C, 'bl', midi_fanout), 0x08110330: (0x08108D4A, 'bl', usb_rx_put)}
+    for base in filled:
+        if base in entry_of:
+            site, kind, target = entry_of[base]
+            expect_branch(image, md, site, kind, target & ~1)
+        else:
+            ins = next(md.disasm(at(image, base - 4, 4), base - 4, 1), None)
+            if ins is None or ins.mnemonic not in ('b', 'b.w') or not int(ins.op_str.strip('# '), 0) >= 0x08175200:
+                fail("0x%08X: the instruction before the hole is not a branch into the blob" % base)
     allowed = {address + i for address, length in spans for i in range(length)}
     changed = {BASE + i for i, (a, b) in enumerate(zip(stock, image)) if a != b}
     unexpected = sorted(changed - allowed)

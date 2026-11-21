@@ -52,18 +52,23 @@ DIAG = 0x2000E400
 D_MNRAND_N, D_MNRAND_LAST, D_MNRAND_FORCE = 0xFE8, 0xFEC, 0xFF0
 MGR = 0x2000C68C
 RAND_PATCH_VT = 0x08170188
-ENTRY = 0x0814476C
+ENTRY, ENTRY_END = 0x0814476C, 0x08144CBC
 NAMES = ('kick snare clap hat-closed hat-open tom perc bass acid lead pad pluck '
          'bell zap stab glitch '
          'cymbal shaker drop fm-bass reese wobble growl sync-lead hoover phaser-pad '
          'gate fm-ep mallet bleeps riser siren drone '
          'metal am-bell talk wind crackle 808 '
-         'cowbell rim conga chord syncussion').split()
+         'cowbell rim conga chord syncussion '
+         'organ gong bounce vargan '
+         'rumble brass flute bowl sub deep').split()
 WEIGHT = (12, 9, 6, 9, 5, 5, 4, 9, 5, 4, 4, 5, 4, 4, 4, 5,
           4, 4, 3, 6, 4, 5, 4, 4, 3, 3, 4, 4, 4, 4, 3, 3, 3,
           4, 3, 3, 2, 2, 5,
           3, 4, 4, 4,                                  # p54: cowbell rim conga chord; perc 6 -> 4
-          4)                                           # p64: syncussion
+          4,                                           # p64: syncussion
+          4, 3, 4, 3,                                  # p66: organ gong bounce vargan
+          3, 4, 3, 3,                                  # p69: rumble brass flute bowl
+          4, 4)                                        # p70: sub deep
 # R2 (p49 layout): C# 1 kick, C#+D# 2 hats/clap/snare, D# 4 toms
 # and the other drums, F# 8 deep basses, F#+G# 16 the other basses, G# 32
 # tonal, A# 64 zaps/blips/glitch, F#+A# 128 everything else
@@ -71,7 +76,10 @@ GROUP = dict(zip(NAMES, (1, 2, 2, 2, 2, 4, 4, 8, 16, 32, 32, 288, 288, 64, 288, 
                          4, 4, 4, 520, 8, 16, 16, 32, 32, 32, 32, 288, 288, 64, 128, 128, 32,
                          4, 288, 32, 128, 128, 8,
                          4, 4, 4, 288,
-                         1024)))      # p51: 256 = G#+A#, plucked/struck tonal; p52: 512 = D#+F#, FM bass; p64: 1024 = C#+F#, Syncussion
+                         1024,
+                         32, 288, 16, 32,      # p66: organ gong bounce vargan
+                         136, 32, 32, 288,     # p69: rumble brass flute bowl
+                         8, 8)))               # p70: sub deep.  p51: 256 = G#+A#, plucked/struck tonal; p52: 512 = D#+F#, FM bass; p64: 1024 = C#+F#, Syncussion
 BLACK = {35: 1, 37: 4, 40: 8, 42: 32, 44: 64}                 # one key
 COMBO = {frozenset((35, 37)): 2, frozenset((40, 42)): 16, frozenset((40, 44)): 128, frozenset((42, 44)): 256,
          frozenset((37, 40)): 512, frozenset((35, 40)): 1024}
@@ -112,8 +120,10 @@ class Rig:
         self.m = m = booted(IMAGE)
         self.uc = uc = m.uc
         if stock_entry:
+            # the whole stock function: past its entry the image holds
+            # generator code of ours (HL, p66)
             stock = Path(STOCK).read_bytes()
-            uc.mem_write(ENTRY, stock[ENTRY - 0x08100000:ENTRY - 0x08100000 + 4])
+            uc.mem_write(ENTRY, stock[ENTRY - 0x08100000:ENTRY_END - 0x08100000])
         self.trace, self.starts = [], []
         # VCO1 pitch, VCO2 pitch, cutoff, output volume (+0x2EDC..+0x2EE8)
         # and the amp ADSR level (+0x2F2C), one read per sample
@@ -225,7 +235,8 @@ def behaves(name, rec, t):
     if name == 'perc':
         return ('a hit: no sustain', get(16, 0) == 0)
     if name == 'bass':
-        return ('pitch %.0f' % base1, base1 in (24, 36, 48))
+        # p70: deepen() may take it an octave or a fifth lower
+        return ('pitch %.0f' % base1, base1 in (24, 29, 36, 41, 48))
     if name == 'acid':
         sweep = max(x[2] for x in t[:960]) - at(t, 290, 2)
         # a per-step S&H on ENV AMOUNT (humanize, half the acids) can take
@@ -335,7 +346,45 @@ def behaves_p39(name, get, t, base1, base2):
         return ('S&H on the volume at audio rate', get(17, 6) == 4 and get(17, 7) == 2)
     if name == '808':
         return ('pitch %.0f, a drop, holds %.2f' % (base1, amp(280)),
-                base1 in (36, 48) and get(0, 4) > 0x8000 and amp(280) >= 0.18)
+                base1 in (24, 29, 36, 41, 48) and get(0, 4) > 0x8000 and amp(280) >= 0.18)
+    if name == 'organ':
+        return ('stops %+.0f st apart, holds %.2f at 280 ms' % (base2 - base1, amp(280)),
+                base2 - base1 in (12, 19, 24, -12) and amp(280) >= 0.8)
+    if name == 'gong':
+        return ('TZFM blooms (X-Env attack %04x), still %.2f at 600 ms' % (get(8, 3), amp(600)),
+                get(8, 3) > 0x2000 and get(8, 4) > 0x8000 and amp(600) > 0.3)
+    if name == 'bounce':
+        # a synced square on VCO1's pitch: two levels, a fifth, an octave or two apart
+        p1 = sorted(x[0] for x in t[160:int(560 * 32)])
+        lo, hi = p1[len(p1) // 50], p1[-1 - len(p1) // 50]
+        on = sum(1 for v in p1 if abs(v - lo) < 0.25 or abs(v - hi) < 0.25) / len(p1)
+        return ('hops %.2f st (%.1f <-> %.1f), %.0f %% of the time on one of them' % (hi - lo, lo, hi, 100 * on),
+                any(abs(hi - lo - iv) < 0.1 for iv in (7, 12, 24)) and on > 0.9 and any(abs(lo - r) < 0.1 for r in (36, 48)))
+    if name == 'vargan':
+        return ('colour %04x, resonance %04x, cutoff moves %.1f' % (get(11, 0), get(10, 0), span(t, 2, 0, 300)),
+                get(11, 0) <= 0x7100 and get(10, 0) >= 0xA000 and span(t, 2, 0, 300) >= 2)   # 0x6000 + p61's 30 %
+    if name == 'sub':
+        # a low sine, nothing under C1
+        return ('pitch %.0f, wave %04x' % (base1, get(2, 0)), 24 <= base1 <= 36 and get(2, 0) <= 0x3600)
+    if name == 'deep':
+        # a sine an octave under VCO1 (deepen() moves both alike), the filter low
+        return ('VCO1 %.0f, sub %.0f' % (base1, base2), base2 == base1 - 12 and base2 >= 24)
+    if name == 'rumble':
+        # low, held, and the volume pumping on a synced ramp
+        return ('pitch %.0f, volume X-Mod wave %d type %d, holds %.2f' % (base1, get(17, 6), get(17, 7), amp(280)),
+                base1 in (24, 36) and get(17, 6) == 3 and get(17, 7) == 1 and amp(280) >= 0.3)
+    if name == 'brass':
+        # the filter blatted open by the envelope, both VCOs scooping up
+        return ('ENV AMOUNT %04x, scoop %+d raw on both' % (get(12, 0), get(0, 4) - 0x8000),
+                get(12, 0) > 0x9000 and get(0, 4) < 0x8000 and get(4, 4) == get(0, 4))
+    if name == 'flute':
+        # breath (VCO2 noised) and a vibrato whose depth an X-Env fades in
+        return ('breath S&H on VCO2, vibrato depth X-Env dest %d, holds %.2f' % (get(0, 8), amp(280)),
+                get(4, 6) == 4 and get(4, 7) == 2 and get(0, 8) == 1 and amp(280) >= 0.4)
+    if name == 'bowl':
+        # sines, a slow tremolo, still ringing
+        return ('tremolo %04x, %.2f at 280 ms' % (get(17, 1), amp(280)),
+                get(17, 1) != 0x8000 and get(17, 7) == 0 and amp(280) > 0.3)
     if name == 'syncussion':
         # one sweep on both VCOs and (in cutoff units) on the cutoff; a
         # low-pass without resonance; decay only

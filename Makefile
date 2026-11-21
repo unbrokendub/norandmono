@@ -78,6 +78,7 @@ test-patch: build/venv/bin/python build/mono_V2.2.0r-patched.syx
 	build/venv/bin/python tests/test_morph_trig.py
 	build/venv/bin/python tests/test_seq_led.py
 	build/venv/bin/python tests/test_qspi_defer.py
+	build/venv/bin/python tests/test_key_bounce.py
 	build/venv/bin/python tests/test_midi_flow.py
 	build/venv/bin/python tests/test_modnote_switch.py
 	build/venv/bin/python tests/test_modnote_random.py

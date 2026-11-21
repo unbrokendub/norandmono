@@ -7,7 +7,7 @@ section 6), D# a bass kit over the page, A# all forty mod notes.
 
 sysemu, mod-note mode:
 
-  1. D# in A minor: a different bass on every key (all seven basses on the
+  1. D# in A minor: a different bass on every key (all eight basses on the
      page's eight mod notes), each key a degree of the scale up from the
      root (A3 B3 C4 D4 E4 F4 G4 A4) -- the keys' live pitches -- and each
      bass's oscillator on that degree; nothing off the page touched, no
@@ -87,12 +87,17 @@ def main():
         # the sounding oscillator: VCO2 when VCO1 is quiet (an FM bass's
         # carrier is VCO2; its VCO1 is the modulator, at most 0x2000)
         osc = [get(c, 4) if get(c, 3) < 0x3000 else get(c, 0) for c in range(8)]
+        # the bouncing octave's VCO1 sits halfway between its two notes (p66):
+        # its root is half the interval under the base, the interval read
+        # off the square's depth
+        hop = {0x8000 + int((st / 126.0) ** (1 / 3) * 32767 + 0.5): int(st * 256) for st in (3.5, 6, 12)}
+        osc = [osc[c] - hop[get(c, 0, 1)] if names[c] == 'bounce' else osc[c] for c in range(8)]
         degree_ok = all((got[c] + osc[c] // 256 - 57 - want_pitch[c]) % 12 == 0 for c in range(8))
         shapes = len({tuple(sorted(x.items())) for x in rec})
         check('%s: %s' % (label, ' '.join(names)),
               (r.diag(D_MNRAND_KITS) - kits, r.diag(D_MNRAND_N) - n0, len(set(names)),
                all(T.GROUP.get(n, 0) & 24 for n in names), all(rec)),
-              (0x100, 8, 7, True, True))
+              (0x100, 8, 8, True, True))
         check('  pitches %s, every bass on its degree, 8 sounds, nothing else touched' % got,
               (got, degree_ok, shapes, T.RAND_PATCH_VT in submits,
                sorted(x for x in r.records()[0] if x[0] not in notes) == before),

@@ -65,14 +65,20 @@ flashing the official update the same way.
 ### The mod-note instrument generator
 
 In mod-note mode the stock TEMPO+FUNC+key randomized every knob
-independently. The generator builds a real instrument instead, from 44
-recipes: kicks, snares, hats, toms, percussion, basses, acid, FM bass, leads,
-pads, plucks, bells, stabs, FX and more.
+independently. The generator builds a real instrument instead, from 54
+recipes: kicks, snares, hats, toms, percussion, basses, sub and deep basses,
+acid, FM bass, leads,
+pads, plucks, bells, stabs, organ, brass, flute, gong, singing bowl, techno
+rumble, FX and more.
 
 - **It follows the pattern.** It uses the pattern's scale and root and the
   mod note's own pitch.
-- **Balanced output.** Levels are balanced between instruments, and
-  envelope times are fitted to the current tempo.
+- **Balanced output.** Each generated sound gets its own output level.
+  A model predicts how loud the patch will be from six of its knob values
+  (oscillator level, filter envelope, band-pass colour, decay, sustain,
+  attack) plus a term per instrument, and sets VOLUME to meet one target.
+  The model was fitted to 1,296 bench renders. Envelope times are fitted to
+  the current tempo.
 - **No dead patches.** A patch that would be inaudible, such as a filter
   shut below the note, is drawn again.
 - **Variety.** A "spice" layer adds 0–3 modulations to basses and tonal
@@ -88,6 +94,13 @@ pads, plucks, bells, stabs, FX and more.
   that falls with the envelope (Simmons-style toms), FM with a saw, and
   noise. An LFO trill or a per-step sample & hold pitch is added
   sometimes. C# + F# picks it alone.
+- **Deep basses.** About half of all basses sit in the lowest octave
+  (C1–F1): some recipes are moved an octave down, some get a sine an octave
+  under them, a few go a fifth down. Nothing sounds under C1. Two recipes
+  are deep by design: a sub bass and a dub / deep-house bass.
+- **A bass that plays itself.** The bouncing octave hops between the root
+  and its octave (sometimes the fifth or two octaves) in time with the
+  tempo, inside one held note.
 - **Kits.**
   - A drum kit over the page, sharing room, brightness, drive and the hats'
     metal.
@@ -148,6 +161,12 @@ The panel went dark or stopped responding while audio kept playing:
 
 - Button chords could leave the UI stuck in a mode (e.g. TYPE+WAVE
   unlink).
+- A key whose contact bounced as it was released could stay held for the
+  UI. Every chord then failed (UP+DOWN no longer left mod-note mode,
+  TEMPO+FUNC+note did nothing) until that key was pressed again. A bounce
+  as a key was pressed could lose the press. The scanner only accepted an
+  edge on an exact pattern of samples; it now takes one on the last four
+  samples, so a bounce only delays it.
 - A pattern rotate (FUNC+UP/DOWN) whose range fell outside the step store
   ran past it and crashed. That is a rotate of a 0-step pattern, or a
   reversed range in a project's events. Such a rotate is now ignored. A
@@ -227,7 +246,7 @@ Kits built after G# use its style. A# clears the style.
 | D# | toms and other drums |
 | F# | deep basses |
 | D# + F# | FM bass only |
-| F# + G# | acid, wobble, growl |
+| F# + G# | acid, wobble, growl, bouncing octave |
 | G# | everything tonal |
 | G# + A# | plucked and struck tonal |
 | A# | zaps, bleeps, glitch |
@@ -287,6 +306,15 @@ knob, 2:1 at ~6 % and 4:1 at ~12 %.
 The patch builder prints every rewritten site and the image size. The
 secondary bootloader rejects images over **512 KiB**, and the build fails
 before producing one.
+
+Most of the new code is appended after the stock image. Some of it sits
+inside the stock image, in 17 stretches of stock code that the patches
+leave unreachable (3.6 KB). These are the bodies of functions whose entries
+now branch to replacements, and functions whose only call now goes to ours;
+the stock mod-note randomizer is the largest. `tools/holes.py` finds them,
+and `tools/patch.py` packs generator code into them and generates the
+linker script. A stretch is used only when the patch that makes it
+unreachable is on.
 
 Features can be switched off individually:
 
@@ -388,9 +416,11 @@ patch/            the injected code
   np_midi.cpp       MIDI out fan-out and receive fixes
   np_random.cpp     scale-aware automation randomizer
   np_mnrand.cpp     the instrument generator, kits, styles, scale library
+  np.ld             where the code goes: after the image, and in the holes (template)
 tools/
   patch.py          applies the patches and builds the .syx
   flash.py          checks a .syx and sends it over USB from macOS (CoreMIDI)
+  holes.py          finds stock code the patches leave unreachable
   norand_syx.py     SysEx container and LZSS codec
   bench/            voice render bench
   diagmidi.py       decoder for the telemetry build

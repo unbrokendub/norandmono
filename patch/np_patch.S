@@ -366,6 +366,8 @@ np_choke_samples:
 np_led_level:
     .word   1                            /* +0x1F4 LV LED level preset, patch.py */
     .word   np_led_target                /* +0x1F8 ...each LED's target, levelled */
+    .word   np_scan_press                /* +0x1FC KB key scanner: press edge   */
+    .word   np_scan_release              /* +0x200 ...and release edge          */
 
 /* ------------------------------------------------------------------ */
 /* Replaces "bl SystemInit" in Reset_Handler.  This is the first       */
@@ -1921,6 +1923,53 @@ np_flash_write:
 /* Live across the call: r0, r2, r3 (the entry), r4, s14, s15; s0-s13   */
 /* are dead at this point of the writer.                                */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* KB (p67): the key scanner's edges, with hysteresis.                  */
+/*                                                                      */
+/* The DMA1_Stream0 handler scans one row of the switch matrix every    */
+/* 250 us, so each key is sampled every 2 ms into an 8-bit shift        */
+/* register (entry +0xA, newest sample in bit 0).  The stock takes an   */
+/* edge only on an exact pattern: a press is 0x0F (four open samples,   */
+/* then four closed), a release 0xF0.  One bounce sample breaks the     */
+/* pattern for good -- a release that reads closed again 1-6 ms after   */
+/* opening (sysemu: 17 of 90 such bounces, stock) never sends its       */
+/* release, the UI believes the key held, and its modifier bit stays in */
+/* the mask: every chord fails (UP+DOWN, TEMPO+FUNC+note) until that    */
+/* key is pressed again.  Here a press is the last four samples closed  */
+/* while the key's debounced flag (entry +0x12, which only the scanner  */
+/* writes: 1 at a press, 0 at a release) is clear, a release the last   */
+/* four open while it is set.  A bounce only delays the edge.           */
+/*                                                                      */
+/* np_scan_press replaces `ldrb.w r3,[fp,#0xa]; cmp r3,#0xf` at         */
+/* 0x0810F62A (with a nop after it), np_scan_release `ldrb r3,[r6,#0xa];*/
+/* cmp r3,#0xf0` at 0x0810F638; the beq after each takes the edge.      */
+/* They return Z set for an edge, and touch r3 and the flags only (lr   */
+/* is free in the scanner: it saved it at entry).  fp and r6 are the    */
+/* key's entry.                                                         */
+/* ------------------------------------------------------------------ */
+    .thumb_func
+    .align 2
+    .global np_scan_press
+np_scan_press:
+    ldrb.w    r3, [fp, #0xa]
+    and       r3, r3, #0xf
+    cmp       r3, #0xf
+    bne       1f                        /* not four closed: Z clear       */
+    ldrb.w    r3, [fp, #0x12]
+    cmp       r3, #0                    /* not yet pressed: Z set, a press */
+1:  bx        lr
+
+    .thumb_func
+    .align 2
+    .global np_scan_release
+np_scan_release:
+    ldrb      r3, [r6, #0xa]
+    tst       r3, #0xf
+    bne       1f                        /* not four open: Z clear         */
+    ldrb      r3, [r6, #0x12]
+    cmp       r3, #1                    /* pressed: Z set, a release       */
+1:  bx        lr
+
     .thumb_func
     .align 2
     .global np_led_smooth

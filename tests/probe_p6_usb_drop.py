@@ -35,6 +35,10 @@ def main(path):
             if uc.reg_read(UC_ARM_REG_R0) != 0:
                 failures.append(uc.reg_read(UC_ARM_REG_R0))
         m.uc.hook_add(UC_HOOK_CODE, after_append, begin=0x0811020A, end=0x0811020A)
+        # the stock fan-out itself: in a patched image its space holds code
+        # of ours (HM, p68)
+        stock = open('build/firmware.bin', 'rb').read()
+        m.uc.mem_write(0x0811A904, stock[0x0811A904 - 0x08100000:0x0811AC90 - 0x08100000])
         m.call(0x0811A904, r0=obj, count=1000000)
         assert m.u32(obj + 0x808) == count, 'stock fan-out did not consume every word'
         assert m.u32(0x20000704) == min(count, 64) * 4

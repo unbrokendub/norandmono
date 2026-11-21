@@ -38,6 +38,7 @@ D_MIDI_USB_HELD, D_MIDI_DIN_HELD, D_MIDI_RX_DROP, D_USB_RX_DROP, D_MIDI_DIN_DROP
 OBJ = 0x30010000                  # a MIDI object for the fan-out rig
 USB_LEN, USB_BUF = 0x20000704, 0x200005C0
 SITES = (0x08108D4A, 0x0811B754)
+STOCK_FUNCS = ((0x0811A904, 0x0811AC90), (0x08110330, 0x081103A0))
 BLOB = 0x08175200
 ok = fail = 0
 stock_bytes = Path(STOCK_BIN).read_bytes()
@@ -59,6 +60,10 @@ def rig(stock, connected=True):
     if stock:
         for a in SITES:
             m.uc.mem_write(a, stock_bytes[a - 0x08100000:a - 0x08100000 + 6])
+        # the stock fan-out and USB ring push themselves: with MF in, their
+        # space holds code of ours (HM, p68)
+        for lo, hi in STOCK_FUNCS:
+            m.uc.mem_write(lo, stock_bytes[lo - 0x08100000:hi - 0x08100000])
     T.stub_return_const(m, 0x08109614, 0x20010000)
     T.stub_return_const(m, 0x0810977C, 0x20011000)
     T.stub_return_const(m, 0x08110240, 1 if connected else 0)
