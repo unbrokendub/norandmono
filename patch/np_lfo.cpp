@@ -115,22 +115,29 @@ typedef float (*ParamValueFn)(void *project, unsigned index);
  * handler does at 0x0811CCD6. */
 constexpr uintptr_t kDefaultRetrig = 0x0811BA3Du;
 
-/* Ten sync divisions, selected from the stock table of fifteen at
- * 0x0815F320.  Dropped by choice: 2/1, 1/4 dotted, the 1/16 quintuplet, the
+/* Eleven sync divisions.  Ten come from the stock table of fifteen at
+ * 0x0815F320; dropped by choice: 2/1, 1/4 dotted, the 1/16 quintuplet, the
  * 1/32 triplet and 1/64 -- the extremes nobody reached for and the two
- * awkward ones.  What is left is
+ * awkward ones.  The eleventh, 1/8 dotted, is not in the stock table at all;
+ * it is added here.  In knob order:
  *
- *     1/1.  1/1  1/2.  1/2  1/4  1/4T  1/8  1/8T  1/16  1/32
+ *     1/1.  1/1  1/2.  1/2  1/4  1/8.  1/4T  1/8  1/8T  1/16  1/32
  *
- * ten detents of 10 % each instead of fifteen of 6.7 %, and every one of
- * them now has a whole number of MIDI pulses per cycle, so the fractional
- * realignment case is gone with them. */
-const float *const kDivTable = reinterpret_cast<const float *>(0x0815F320u);
-constexpr unsigned kDivCount = 10u;
-
-/* index into the stock fifteen */
-const uint8_t kDivSelect[kDivCount] = {
-    1u, 2u, 3u, 4u, 6u, 7u, 8u, 9u, 10u, 12u,
+ * eleven detents of 9.1 % each instead of fifteen of 6.7 %, and every one
+ * of them has a whole number of MIDI pulses per cycle, so the fractional
+ * realignment case is gone.
+ *
+ * The values are engine ticks per cycle (a quarter note is 1024).  The ten
+ * stock ones are the same floats as the stock table, bit for bit: 2048/3
+ * and 1024/3 round to exactly the stock 682.6667 and 341.3333.
+ *
+ * 1/8 dotted sits between 1/4 and 1/4T, so the centre of each of the old
+ * ten 10 % detents still selects the division it did; only positions near
+ * the edges of 1/4 and 1/4T move to it. */
+constexpr unsigned kDivCount = 11u;
+const float kDivTicks[kDivCount] = {
+    6144.0f, 4096.0f, 3072.0f, 2048.0f, 1024.0f, 768.0f,
+    2048.0f / 3.0f, 512.0f, 1024.0f / 3.0f, 256.0f, 128.0f,
 };
 
 /* Where a division's boundaries fall, counted in MIDI clock pulses.
@@ -139,9 +146,9 @@ const uint8_t kDivSelect[kDivCount] = {
  * truncates it to u32 and passes that as `pos`, then adds 42.666666... to
  * it (the literal at 0x08118D68 is exactly 128/3).  So one quarter note is
  * 24 * 128/3 = 1024 engine ticks, and each period is division / (128/3).
- * All ten are whole numbers. */
+ * All eleven are whole numbers; 1/8 dotted is 768 ticks, 18 pulses. */
 const uint16_t kPulseNumerator[kDivCount] = {
-    144u, 96u, 72u, 48u, 24u, 16u, 12u, 8u, 6u, 3u,
+    144u, 96u, 72u, 48u, 24u, 18u, 16u, 12u, 8u, 6u, 3u,
 };
 
 /* The accumulator advances by 128/3 per pulse and `pos` is its floor, so
@@ -258,7 +265,7 @@ inline float division_of(void *owner, bool consume_delta,
     if (selected_index != nullptr)
         *selected_index = idx;
 
-    return kDivTable[kDivSelect[idx]];
+    return kDivTicks[idx];
 }
 
 inline bool division_boundary(uint32_t pos, unsigned idx)
@@ -407,10 +414,10 @@ void xmod_apply(void *self, unsigned mode)
         unsigned idx = static_cast<unsigned>(v * static_cast<float>(kDivCount));
         if (idx >= kDivCount)
             idx = kDivCount - 1u;
-        /* through kDivSelect, exactly as division_of does -- indexing the
+        /* through kDivTicks, exactly as division_of does -- indexing the
          * stock table directly here would make the parameter handler and
          * the clock tick disagree about what a knob position means */
-        out = transport_rate() / kDivTable[kDivSelect[idx]];
+        out = transport_rate() / kDivTicks[idx];
         break;
     }
 
