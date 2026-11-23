@@ -82,6 +82,7 @@ test-patch: build/venv/bin/python build/mono_V2.2.0r-patched.syx
 	build/venv/bin/python tests/test_midi_flow.py
 	build/venv/bin/python tests/test_modnote_switch.py
 	build/venv/bin/python tests/test_modnote_random.py
+	build/venv/bin/python tests/test_bench_levels.py --firmware --fast-firmware
 	build/venv/bin/python tests/test_patch_random.py
 	build/venv/bin/python tests/test_kits.py
 	build/venv/bin/python tests/test_sync_load.py

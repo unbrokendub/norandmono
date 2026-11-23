@@ -18,14 +18,15 @@
  *   9      VCO1 volume CV (exponential)
  *   10, 11 VCO1, VCO2 pitch (semitones, MIDI)
  *   12     cutoff (semitones, 81 = 440 Hz)
- *   13     output volume CV (exponential)
+ *   13     final VCA gain CV (exponential; includes the main ADSR)
  *   14     resonance 0..1
  *   15     colour 0..1 (band-pass, low-pass, high-pass; all-pass between)
  *   30     amp envelope 0..1
  * The exponential CVs read 1.0 at unity and lose 0.0502 per halving
  * (measured: a knob at 1/2 gives 0.9498, at 1/16 0.7993), 0 is off.
  *
- * usage: render in.f32 out.wav [sync 0|1]
+ * usage: render in.f32 out.wav [sync 0|1] [raw-output.f32]
+ * The optional float32 output is unnormalised, for level measurements.
  */
 #include <math.h>
 #include <stdint.h>
@@ -39,6 +40,33 @@
 
 static double expo(double cv) { return cv <= 0.01 ? 0.0 : pow(2.0, (cv - 1.0) / 0.0502); }
 static double midi_hz(double m) { return 440.0 * pow(2.0, (m - 69.0) / 12.0); }
+
+/* Actual CV -> DAC word conversion, 0x081135B2..0x0811378A. ARM VCVT
+ * saturates to uint32, then STRH/BFI keeps the low 16 bits. In particular,
+ * a finite intermediate CV > 1 is NOT unbounded analog gain. The stock
+ * waveform mapper occasionally produces one around a zero crossing.
+ * Model the emitted word, including the stock negative-CV wrap, before
+ * interpolating. Do not silently "fix" the stock output with a 0..1 clamp. */
+static uint16_t dac_word(double x)
+{
+    if (!(x > 0.0)) return 0;
+    if (x >= 4294967295.0) return 0xffff;
+    return (uint16_t)(uint32_t)x;
+}
+
+static void emitted_cv(float *v)
+{
+    for (int k = 0; k < 8; ++k) {
+        float x = (1.0f-v[k])*65535.0f; /* stock uses single precision here */
+        v[k] = 1.0-(double)dac_word(x)/65535.0;
+    }
+    const int inverse[] = {8,9,13,14};
+    for (unsigned i=0; i<sizeof inverse/sizeof inverse[0]; ++i) {
+        const int k=inverse[i];
+        v[k] = 1.0-(double)dac_word((1.0-(double)v[k])*65535.0)/65535.0;
+    }
+    v[15] = (double)dac_word(v[15]*65535.0f)/65535.0;
+}
 
 /* polyBLEP residual for a discontinuity at phase 0 */
 static double blep(double t, double dt)
@@ -79,7 +107,7 @@ typedef struct { double ic1, ic2, lp1, hp1, lpb; } Svf;
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: render in.f32 out.wav [sync]\n");
+        fprintf(stderr, "usage: render in.f32 out.wav [sync] [raw-output.f32]\n");
         return 2;
     }
     const int sync = argc > 3 && atoi(argv[3]);
@@ -93,6 +121,7 @@ int main(int argc, char **argv)
     if (fread(cv, 4, n * NCV, f) != (size_t)(n * NCV))
         return 1;
     fclose(f);
+    for (long i=0; i<n; ++i) emitted_cv(cv+i*NCV);
 
     double *out = calloc(n, sizeof(double));
     const double fs = FS * OS;
@@ -179,8 +208,11 @@ int main(int argc, char **argv)
                 const double u = 2 * c - 1;
                 y = (1 - u) * lp3 + u * hp3 - sin(M_PI * u) * k * bp;
             }
-            /* the VCA: output volume times the amp envelope */
-            y *= expo(L(13)) * L(30);
+            /* 0x081131DC already multiplies OutVol by the main ADSR,
+             * before the log/CV lookup at 0x08113218. Applying frame[30]
+             * here a second time squares the envelope and understates
+             * short notes. Frame[30] is diagnostic, not another VCA. */
+            y *= expo(L(13));
             /* a DC blocker (~10 Hz): the drive's asymmetric clip leaves an offset */
             const double dcy = y - dcx + 0.99951 * dco;
             dcx = y;
@@ -199,6 +231,19 @@ int main(int argc, char **argv)
         out[i] = acc;
         if (fabs(acc) > peak)
             peak = fabs(acc);
+    }
+
+    if (argc > 4) {
+        FILE *raw = fopen(argv[4], "wb");
+        if (!raw)
+            return 1;
+        for (long i = 0; i < n; ++i) {
+            const float y = (float)out[i];
+            if (fwrite(&y, sizeof y, 1, raw) != 1)
+                return 1;
+        }
+        if (fclose(raw))
+            return 1;
     }
 
     FILE *w = fopen(argv[2], "wb");
@@ -232,6 +277,6 @@ int main(int argc, char **argv)
         fwrite(&q, 2, 1, w);
     }
     fclose(w);
-    printf("%ld frames, peak %.4f\n", n, peak);
+    printf("%ld frames, peak %.9g\n", n, peak);
     return 0;
 }

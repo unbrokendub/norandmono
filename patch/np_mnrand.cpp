@@ -187,20 +187,24 @@ constexpr unsigned audio_st(int st)
  * 0..63, is (d + 1) / 4 of the played note: d 3 = 1.0, d 15 = 4.0, d 55 =
  * 14.0; bank B, 64..127, the irrational Yamaha set (docs/ratio-table.md). */
 constexpr unsigned ratio_detent(unsigned d) { return d * 512u + 256u; }
-/* Synced (type 1): eleven divisions, one per 1/11 of the knob (np_lfo.cpp
+/* Synced (type 1): twelve divisions, one per 1/12 of the knob (np_lfo.cpp
  * kDivTicks); they run from the tempo whether or not the sequencer plays,
- * and restart at the pattern's start.  The generator uses ten of them, not
- * 1/8 dotted, and writes the centres of the earlier ten 10 % detents.  Each
- * of those centres still lands inside its own division on the eleven-detent
- * knob (raw / 65536 * 11), which the assert below checks, so the recipes
- * draw exactly the divisions they did. */
+ * and restart at the pattern's start. The recipes keep their ten logical
+ * IDs and durations, without inserting dotted choices into random ranges.
+ * Encode their centres on the new knob: four old centres would otherwise
+ * select a different duration. The raw table avoids division at run time. */
 enum Division : unsigned { D_1D, D_1, D_2D, D_2, D_4, D_4T, D_8, D_8T, D_16, D_32 };
-constexpr unsigned division(unsigned d) { return d * 6554u + 3277u; }
-constexpr unsigned kDivKnob[] = {0u, 1u, 2u, 3u, 4u, 6u, 7u, 8u, 9u, 10u};
+constexpr uint8_t kDivKnob[] = {0u, 1u, 2u, 3u, 5u, 7u, 8u, 9u, 10u, 11u};
+constexpr unsigned div_center(unsigned i) { return (2u * i + 1u) * 65536u / 24u; }
+constexpr uint16_t kDivRaw[] = {
+    div_center(0), div_center(1), div_center(2), div_center(3), div_center(5),
+    div_center(7), div_center(8), div_center(9), div_center(10), div_center(11),
+};
+constexpr unsigned division(unsigned d) { return kDivRaw[d]; }
 constexpr bool divisions_land()
 {
     for (unsigned d = D_1D; d <= D_32; ++d)
-        if (division(d) * 11u / 65536u != kDivKnob[d])
+        if (division(d) * 12u / 65536u != kDivKnob[d])
             return false;
     return true;
 }
@@ -272,7 +276,10 @@ struct Context {
 
 /* ---- the patch being built --------------------------------------------- */
 inline int mod12(int v) { return ((v % 12) + 12) % 12; }
-const int kFifth[] = {7};
+/* p72: these recipe choices fit in bytes (raw waveform choices in uint16).
+ * 32-bit tables wasted flash; 13,500 paired ARM draws, including scales,
+ * tempos and kits, are bit-identical after narrowing the tables. */
+const int8_t kFifth[] = {7};
 
 struct Patch {
     uint16_t v[kSlots][kLocals];
@@ -314,7 +321,7 @@ struct Patch {
     /* an interval above (or below) `from` among the candidates that land in
      * the scale; failing all of them an octave, unison or fifth that does */
     template <unsigned N>
-    int interval(int from, const int (&cand)[N])
+    int interval(int from, const int8_t (&cand)[N])
     {
         int c[N];
         unsigned n = 0;
@@ -323,7 +330,7 @@ struct Patch {
                 c[n++] = iv;
         if (n)
             return c[g->below(n)];
-        static const int kSafe[] = {12, 0, 7, -12};
+        static const int8_t kSafe[] = {12, 0, 7, -12};
         for (int iv : kSafe)
             if (in_scale(from + iv))
                 return iv;
@@ -467,7 +474,7 @@ unsigned metallic(Gen &g) { return 64u + g.below(48); }
 void op_fm(Patch &p, Gen &g, unsigned slot, unsigned detent, unsigned i_lo, unsigned i_hi,
            unsigned d_lo, unsigned d_hi, unsigned stay_hi)
 {
-    static const unsigned kWave[] = {W_SINE, W_SINE, W_SINE, W_SINE, W_TRI, W_SQUARE};
+    static const uint8_t kWave[] = {W_SINE, W_SINE, W_SINE, W_SINE, W_TRI, W_SQUARE};
     p.xmod(slot, g.pick(kWave), T_RATIO, ratio_detent(detent),
            stay_hi > 0x8000u ? g.range(0x8000, stay_hi) : 0x8000u);
     p.set(slot, XENV_DEST, 1);
@@ -488,7 +495,7 @@ void am(Patch &p, Gen &g, unsigned slot, unsigned type, unsigned rate, unsigned 
 
 void filter_fm(Patch &p, Gen &g, unsigned type, unsigned rate, unsigned d_lo, unsigned d_hi, bool fade)
 {
-    static const unsigned kWave[] = {W_SINE, W_SINE, W_TRI, W_SAW, W_SQUARE};
+    static const uint8_t kWave[] = {W_SINE, W_SINE, W_TRI, W_SAW, W_SQUARE};
     if (fade) {
         p.xmod(CUTOFF, g.pick(kWave), type, rate, 0x8000);
         p.set(CUTOFF, XENV_DEST, 1);
@@ -505,7 +512,7 @@ void wave_fm(Patch &p, Gen &g, unsigned slot, unsigned detent, unsigned d_lo, un
 
 void humanize(Patch &p, Gen &g, unsigned slot, unsigned d_lo, unsigned d_hi)
 {
-    static const unsigned kDiv[] = {D_16, D_16, D_8, D_32};
+    static const uint8_t kDiv[] = {D_16, D_16, D_8, D_32};
     if (untouched(p, slot))
         p.xmod(slot, W_SH, T_SYNCED, division(g.pick(kDiv)), g.range(d_lo, d_hi));
 }
@@ -684,7 +691,7 @@ void metal(Patch &p, Gen &g, int st_lo, int st_hi, int iv_lo, int iv_hi)
     const int st1 = k ? k->metal_st : g.irange(st_lo, st_hi);
     p.base(VCO1_WAVE, RAW(kTri), RAW(kSaw));
     p.base(VCO1_TUNE, tune(st1));
-    p.bases(KBASES(VCO1_VOL, 0x5000, 0x9800, VCO2_WAVE, RAW(kSquare) - 0x1000, RAW(kSaw), RAW(kSquare) - 0x1000, RAW(kSaw)));
+    p.bases(KBASES(VCO1_VOL, 0x5000, 0x9800, VCO2_WAVE, RAW(kSquare) - 0x1000, RAW(kSaw)));
     p.base(VCO2_TUNE, tune(st1 + (k ? k->metal_iv : g.irange(iv_lo, iv_hi))));
     if (k) {
         p.base(VCO2_FINE, k->metal_fine);
@@ -733,7 +740,7 @@ void tom(Patch &p, Gen &g)
     /* in a kit, a fifth, an octave or an octave and a fifth over its kick */
     int st = p.anchor(-28, 2);
     if (const Kit *k = p.cx->kit) {
-        static const int kOver[] = {7, 12, 12, 19};
+        static const int8_t kOver[] = {7, 12, 12, 19};
         const int want = k->kick_note + p.interval(k->kick_note - p.cx->played, kOver) - p.cx->played;
         if (k->kick_note && want >= -30 && want <= 4)
             st = want;
@@ -743,7 +750,7 @@ void tom(Patch &p, Gen &g)
     p.xenv(VCO1_TUNE, KXENV(0, 0, RAW(xdec(20)), RAW(xdec(300)), RAW(semis(2)), RAW(semis(30))));
     switch (g.below(5)) {
     case 0: case 1: {                                  /* a fifth or octave of body */
-        static const int kBody[] = {7, 12};
+        static const int8_t kBody[] = {7, 12};
         p.base(VCO2_WAVE, RAW(kSine), RAW(kTri));
         p.base(VCO2_TUNE, tune(st + p.interval(st, kBody)));
         p.base(VCO2_VOL, 0x2000, 0x5800);
@@ -851,13 +858,13 @@ void perc(Patch &p, Gen &g)
 
 /* VCO waves: anything from triangle to saw for the rich voices, sine to
  * triangle-ish for the soft ones */
-const unsigned kRich[] = {kSaw, kSquare, kSaw, 0xD000, kTri + 0x2000, kSquare + 0x1800};
-const unsigned kSoft[] = {kSaw, kTri, 0xD000, kTri + 0x1800, kSine + 0x2000};
+const uint16_t kRich[] = {kSaw, kSquare, kSaw, 0xD000, kTri + 0x2000, kSquare + 0x1800};
+const uint16_t kSoft[] = {kSaw, kTri, 0xD000, kTri + 0x1800, kSine + 0x2000};
 unsigned rich(Gen &g) { return g.chance(70) ? g.pick(kRich) : g.range(RAW(kTri), RAW(kSaw)); }
 
 void bass(Patch &p, Gen &g)
 {
-    static const int kOct[] = {-36, -24, -24, -24, -24, -12, -12, -12};
+    static const int8_t kOct[] = {-36, -24, -24, -24, -24, -12, -12, -12};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, g.chance(10) ? g.range(RAW(kSine), RAW(kTri)) : rich(g));
     p.base(VCO1_TUNE, tune(st));
@@ -950,13 +957,13 @@ void acid(Patch &p, Gen &g)
 
 void lead(Patch &p, Gen &g)
 {
-    static const int kOct[] = {-12, -12, 0, 0, 0, 12};
+    static const int8_t kOct[] = {-12, -12, 0, 0, 0, 12};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, rich(g));
     p.base(VCO1_TUNE, tune(st));
     p.base(VCO1_VOL, 0x6000, 0xB000);
     p.base(VCO2_WAVE, rich(g));
-    static const int kInterval[] = {0, 0, 0, 12, 7, -12, 5, 19, 24, 3, 4};
+    static const int8_t kInterval[] = {0, 0, 0, 12, 7, -12, 5, 19, 24, 3, 4};
     const int iv = p.interval(st, kInterval);
     p.base(VCO2_TUNE, tune(st + iv));
     if (iv == 0) {
@@ -972,7 +979,7 @@ void lead(Patch &p, Gen &g)
         p.set(VCO1_TUNE, XENV_DEST, 1);
         p.xenv(VCO1_TUNE, KXENV(RAW(xatk(50)), RAW(xatk(800)), RAW(xdec(2500)), RAW(xdec(5000)), RAW(semis(0.1)), RAW(semis(0.6))));
     }
-    static const unsigned kBright[] = {4, 8, 8, 12, 16};
+    static const uint8_t kBright[] = {4, 8, 8, 12, 16};
     switch (g.below(5)) {
     case 0:     /* VCO2 an FM operator: a brighter, glassier attack */
         if (untouched(p, VCO2_TUNE))
@@ -990,13 +997,13 @@ void lead(Patch &p, Gen &g)
 
 void pad(Patch &p, Gen &g)
 {
-    static const int kOct[] = {-24, -12, -12, 0, 0};
+    static const int8_t kOct[] = {-24, -12, -12, 0, 0};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, g.chance(70) ? g.pick(kSoft) : rich(g));
     p.base(VCO1_TUNE, tune(st));
     p.base(VCO1_VOL, 0x5000, 0x9800);
     p.base(VCO2_WAVE, g.chance(70) ? g.pick(kSoft) : rich(g));
-    static const int kInterval[] = {0, 0, 7, 12, -12, 5, 3, 4, 19, 24, 10};
+    static const int8_t kInterval[] = {0, 0, 7, 12, -12, 5, 3, 4, 19, 24, 10};
     const int iv = p.interval(st, kInterval);
     p.base(VCO2_TUNE, tune(st + iv));
     p.bases(KBASES(VCO2_FINE, RAW(cents(-30)), RAW(cents(30)), VCO2_VOL, 0x5000, 0x9800));
@@ -1019,7 +1026,7 @@ void pad(Patch &p, Gen &g)
         p.xmod(COLOR, g.chance(50) ? W_SINE : W_TRI, T_LFO, g.range(RAW(lfo_hz(0.03)), RAW(lfo_hz(0.4))),
                g.range(RAW(norm(0.05)), RAW(norm(0.25))));
     if (g.chance(25) && untouched(p, VCO2_TUNE)) {   /* a little FM that glistens */
-        static const unsigned kHigh[] = {8, 12, 16};
+        static const uint8_t kHigh[] = {8, 12, 16};
         op_fm(p, g, VCO2_TUNE, harmonic(st + iv, g.pick(kHigh)), RAW(semis(0.5)), RAW(semis(4)),
               RAW(xdec(1000)), RAW(xdec(5000)), RAW(semis(3)));
     }
@@ -1028,7 +1035,7 @@ void pad(Patch &p, Gen &g)
 
 void pluck(Patch &p, Gen &g)
 {
-    static const int kOct[] = {-24, -12, 0, 0, 12};
+    static const int8_t kOct[] = {-24, -12, 0, 0, 12};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, rich(g));
     p.base(VCO1_TUNE, tune(st));
@@ -1065,7 +1072,7 @@ void pluck(Patch &p, Gen &g)
     }
     p.filter(KFILTER(RAW(cutoff(35)), RAW(cutoff(110)), 0, 0xB000, 0x6800, 0x8800, RAW(cuts(25)), RAW(cuts(110))));
     if (g.chance(25) && untouched(p, VCO1_TUNE)) {      /* an FM pluck on VCO1 */
-        static const unsigned kR[] = {4, 8, 12, 16};
+        static const uint8_t kR[] = {4, 8, 12, 16};
         op_fm(p, g, VCO1_TUNE, harmonic(st, g.pick(kR)), RAW(semis(4)), RAW(semis(20)),
               RAW(xdec(20)), RAW(xdec(200)), 0);
     }
@@ -1075,7 +1082,7 @@ void pluck(Patch &p, Gen &g)
 
 void bell(Patch &p, Gen &g)
 {
-    static const int kOct[] = {-12, 0, 0, 12, 12, 24};
+    static const int8_t kOct[] = {-12, 0, 0, 12, 12, 24};
     const int st2 = g.pick(kOct);
     p.base(VCO2_WAVE, RAW(kSine), 0x1800);
     p.base(VCO2_TUNE, tune(st2));
@@ -1124,8 +1131,8 @@ void zap(Patch &p, Gen &g)
 
 void stab(Patch &p, Gen &g)
 {
-    static const int kInterval[] = {3, 4, 5, 7, 7, 8, 9, 10, 12, 14, 15, 16, 17};
-    static const int kOct[] = {-24, -12, -12, 0, 0, 12};
+    static const int8_t kInterval[] = {3, 4, 5, 7, 7, 8, 9, 10, 12, 14, 15, 16, 17};
+    static const int8_t kOct[] = {-24, -12, -12, 0, 0, 12};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, rich(g));
     p.base(VCO1_TUNE, tune(st));
@@ -1135,7 +1142,7 @@ void stab(Patch &p, Gen &g)
     p.base(VCO2_VOL, 0x6000, 0xA800);
     p.filter(KFILTER(RAW(cutoff(50)), RAW(cutoff(115)), 0, 0x9000, 0x6800, 0x8800, RAW(cuts(20)), RAW(cuts(100))));
     if (g.chance(35)) {     /* a 90s FM stab: both VCOs FM'd, the index falling */
-        static const unsigned kR[] = {4, 8, 8, 12, 16};
+        static const uint8_t kR[] = {4, 8, 8, 12, 16};
         const int st2 = int(p.v[VCO2_TUNE][BASE] / 256) - 57;
         op_fm(p, g, VCO1_TUNE, harmonic(st, g.pick(kR)), RAW(semis(4)), RAW(semis(18)),
               RAW(xdec(50)), RAW(xdec(400)), 0);
@@ -1162,7 +1169,7 @@ void glitch(Patch &p, Gen &g)
     p.filter(RAW(cutoff(60)), color > 0xC000 ? RAW(cutoff(110)) : RAW(cutoff(145)), 0, 0xD000,
              color, color, RAW(cuts(-30)), RAW(cuts(60)));
     p.adsr(KADSR(0, RAW(env(10)), RAW(env(20)), RAW(env(800)), 0, RAW(level(0.7)), RAW(env(10)), RAW(env(400))));
-    static const unsigned kDest[] = {VCO1_TUNE, VCO2_TUNE, CUTOFF, TZFM, VCO2_WAVE, VCO1_WAVE, VOLUME, RESO, COLOR};
+    static const uint8_t kDest[] = {VCO1_TUNE, VCO2_TUNE, CUTOFF, TZFM, VCO2_WAVE, VCO1_WAVE, VOLUME, RESO, COLOR};
     unsigned used = 0;
     for (unsigned n = 1 + g.below(4); n;) {
         const unsigned d = g.pick(kDest);
@@ -1170,8 +1177,8 @@ void glitch(Patch &p, Gen &g)
             continue;
         used |= 1u << d;
         --n;
-        static const unsigned kWave[] = {W_SH, W_SH, W_SH, W_SQUARE, W_SAW, W_TRI, W_SINE};
-        static const unsigned kType[] = {T_SYNCED, T_SYNCED, T_SYNCED, T_AUDIO, T_AUDIO, T_AUDIO,
+        static const uint8_t kWave[] = {W_SH, W_SH, W_SH, W_SQUARE, W_SAW, W_TRI, W_SINE};
+        static const uint8_t kType[] = {T_SYNCED, T_SYNCED, T_SYNCED, T_AUDIO, T_AUDIO, T_AUDIO,
                                          T_AUDIO, T_RATIO, T_RATIO, T_LFO};
         const unsigned type = g.pick(kType);
         unsigned amt;
@@ -1271,7 +1278,7 @@ void fm_index(Patch &p, Gen &g, unsigned detent, unsigned d_lo, unsigned d_hi,
  * deeper, four operators half the time, and it can move with the tempo. */
 void fm_bass(Patch &p, Gen &g)
 {
-    static const int kOct[] = {-36, -24, -24, -24, -12, -12};
+    static const int8_t kOct[] = {-36, -24, -24, -24, -12, -12};
     const int st = g.pick(kOct);
     p.bases(KBASES(VCO1_VOL, 0, 0, VCO2_WAVE, RAW(kSine), 0x4000));
     p.base(VCO2_TUNE, tune(st));
@@ -1300,7 +1307,7 @@ void fm_bass(Patch &p, Gen &g)
     }
     if (how >= 1u) {
         /* analog thru-zero FM: VCO1 the modulator a musical interval away */
-        static const int kMod[] = {0, 0, 12, 12, 19, 24, 7, -12, 28};
+        static const int8_t kMod[] = {0, 0, 12, 12, 19, 24, 7, -12, 28};
         const int mst = st + g.pick(kMod);
         p.base(VCO1_WAVE, RAW(kSine), RAW(kTri));
         p.base(VCO1_TUNE, tune(mst));
@@ -1343,7 +1350,7 @@ void fm_ep(Patch &p, Gen &g)
 
 void mallet(Patch &p, Gen &g)
 {
-    static const int kOct[] = {-12, 0, 0, 12, 12, 24};
+    static const int8_t kOct[] = {-12, 0, 0, 12, 12, 24};
     const int st = g.pick(kOct);
     p.bases(KBASES(VCO1_VOL, 0, 0, VCO2_WAVE, RAW(kSine), 0x1000));
     p.base(VCO2_TUNE, tune(st));
@@ -1426,8 +1433,8 @@ void wobble(Patch &p, Gen &g)
     /* low enough to close, high enough that the wobble opens it (bench: a
      * base of 30 left the filter shut most of the cycle) */
     p.filter(KFILTER(RAW(cutoff(55)), RAW(cutoff(85)), 0x3000, 0xD000, kLp, kLp, kFenv0, kFenv0));
-    static const unsigned kDiv[] = {D_2, D_4, D_4, D_4T, D_8, D_8, D_8T, D_16, D_16, D_32};
-    static const unsigned kWave[] = {W_SINE, W_SINE, W_SINE, W_TRI, W_TRI, W_SAW, W_SQUARE, W_SH};
+    static const uint8_t kDiv[] = {D_2, D_4, D_4, D_4T, D_8, D_8, D_8T, D_16, D_16, D_32};
+    static const uint8_t kWave[] = {W_SINE, W_SINE, W_SINE, W_TRI, W_TRI, W_SAW, W_SQUARE, W_SH};
     const unsigned div = division(g.pick(kDiv));
     switch (g.below(6)) {
     case 0:     /* the colour wobbles, low-pass to band-pass */
@@ -1463,7 +1470,7 @@ void growl(Patch &p, Gen &g)
         p.base(VCO2_VOL, 0x4000, 0x8800);
     }
     p.filter(KFILTER(RAW(cutoff(45)), RAW(cutoff(100)), 0x2000, 0xC000, kLp, kLp, kFenv0, RAW(cuts(20))));
-    static const unsigned kWave[] = {W_SINE, W_TRI, W_SAW, W_SQUARE};
+    static const uint8_t kWave[] = {W_SINE, W_TRI, W_SAW, W_SQUARE};
     if (g.chance(50))       /* a ratio: the growl's timbre follows the note */
         p.xmod(CUTOFF, g.pick(kWave), T_RATIO, ratio_detent(harmonic(st, g.chance(50) ? 4 : 8)), 0x8000);
     else
@@ -1480,7 +1487,7 @@ void sync_lead(Patch &p, Gen &g)
 {
     /* VCO2 hard-synced to VCO1 and swept: the sync timbre is VCO2's, so
      * VCO1 (the master) stays quiet */
-    static const int kOct[] = {-24, -12, -12, 0, 0, 12};
+    static const int8_t kOct[] = {-24, -12, -12, 0, 0, 12};
     const int st = g.pick(kOct);
     p.bases(KBASES(SYNC, 1, 1, VCO1_WAVE, RAW(kTri), RAW(kSaw)));
     p.base(VCO1_TUNE, tune(st));
@@ -1505,7 +1512,7 @@ void hoover(Patch &p, Gen &g)
     /* the rave hoover: detuned saws scooping up into the note, and the
      * wave moving between square and saw (a pulse-width sweep, near
      * enough) */
-    static const int kInterval[] = {0, 0, -12, 12};
+    static const int8_t kInterval[] = {0, 0, -12, 12};
     const int st = g.chance(50) ? -12 : 0;
     const int iv = g.pick(kInterval);
     p.base(VCO1_WAVE, 0xB800, 0xF000);
@@ -1530,13 +1537,13 @@ void phaser_pad(Patch &p, Gen &g)
 {
     /* the colour half way between low- and high-pass is a resonant
      * all-pass; a slow LFO on its cutoff sweeps the notches: a phaser */
-    static const int kOct[] = {-24, -12, -12, 0, 0};
+    static const int8_t kOct[] = {-24, -12, -12, 0, 0};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, g.chance(70) ? g.pick(kSoft) : rich(g));
     p.base(VCO1_TUNE, tune(st));
     p.base(VCO1_VOL, 0x5000, 0x9800);
     p.base(VCO2_WAVE, g.chance(70) ? g.pick(kSoft) : rich(g));
-    static const int kInterval[] = {0, 0, 7, 12, -12, 5, 19};
+    static const int8_t kInterval[] = {0, 0, 7, 12, -12, 5, 19};
     p.base(VCO2_TUNE, tune(st + p.interval(st, kInterval)));
     p.bases(KBASES(VCO2_FINE, RAW(cents(-30)), RAW(cents(30)), VCO2_VOL, 0x5000, 0x9800));
     p.filter(KFILTER(RAW(cutoff(70)), RAW(cutoff(120)), 0x4000, 0xC000, 0xB000, 0xD000, kFenv0, kFenv0));
@@ -1550,8 +1557,8 @@ void gate(Patch &p, Gen &g)
 {
     /* a sustained chord chopped by a synced square (or ramp, or random
      * levels) on the volume */
-    static const int kInterval[] = {3, 4, 5, 7, 7, 12, 10, 9};
-    static const int kOct[] = {-12, -12, 0, 0, 12};
+    static const int8_t kInterval[] = {3, 4, 5, 7, 7, 12, 10, 9};
+    static const int8_t kOct[] = {-12, -12, 0, 0, 12};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, rich(g));
     p.base(VCO1_TUNE, tune(st));
@@ -1560,8 +1567,8 @@ void gate(Patch &p, Gen &g)
     p.base(VCO2_TUNE, tune(st + p.interval(st, kInterval)));
     p.base(VCO2_VOL, 0x6000, 0xA000);
     p.filter(KFILTER(RAW(cutoff(70)), RAW(cutoff(130)), 0, 0x7000, 0x6800, 0x8800, kFenv0, RAW(cuts(25))));
-    static const unsigned kDiv[] = {D_4, D_8, D_8, D_8T, D_16, D_16, D_16, D_32};
-    static const unsigned kWave[] = {W_SQUARE, W_SQUARE, W_SQUARE, W_SQUARE, W_SAW, W_SH};
+    static const uint8_t kDiv[] = {D_4, D_8, D_8, D_8T, D_16, D_16, D_16, D_32};
+    static const uint8_t kWave[] = {W_SQUARE, W_SQUARE, W_SQUARE, W_SQUARE, W_SAW, W_SH};
     p.xmod(VOLUME, g.pick(kWave), T_SYNCED, division(g.pick(kDiv)), g.range(RAW(norm(0.7)), RAW(norm(1.0))));
     if (g.chance(30))
         humanize(p, g, CUTOFF, RAW(cuts(5)), RAW(cuts(20)));
@@ -1573,7 +1580,7 @@ void bleeps(Patch &p, Gen &g)
 {
     /* computer bleeps: a synced sample & hold on the pitch (and the
      * resonant cutoff), a new random note on every division */
-    static const unsigned kDiv[] = {D_16, D_16, D_8, D_8T, D_32};
+    static const uint8_t kDiv[] = {D_16, D_16, D_8, D_8T, D_32};
     const unsigned div = division(g.pick(kDiv));
     p.base(VCO1_WAVE, g.chance(50) ? RAW(kSine) : g.range(RAW(kTri), RAW(kSaw)));
     p.base(VCO1_TUNE, tune(g.chance(50) ? 0 : g.chance(50) ? 12 : 24));
@@ -1642,9 +1649,9 @@ void drone(Patch &p, Gen &g)
 {
     /* low, sustained, and never quite the same: slow LFOs on the TZFM,
      * VCO2's waveform and the cutoff, at unrelated rates */
-    static const int kOct[] = {-36, -24, -24, -12, -12, 0};
+    static const int8_t kOct[] = {-36, -24, -24, -12, -12, 0};
     const int st = g.pick(kOct);
-    static const int kInterval[] = {0, 7, 12, 19, 5, 24};
+    static const int8_t kInterval[] = {0, 7, 12, 19, 5, 24};
     p.base(VCO1_WAVE, g.range(RAW(kSine), RAW(kSaw)));
     p.base(VCO1_TUNE, tune(st));
     p.base(VCO1_VOL, 0x5000, 0x9800);
@@ -1662,7 +1669,7 @@ void drone(Patch &p, Gen &g)
         p.xmod(COLOR, W_SINE, T_LFO, g.range(RAW(lfo_hz(0.02)), RAW(lfo_hz(0.3))),
                g.range(RAW(norm(0.05)), RAW(norm(0.25))));
     if (g.chance(30) && untouched(p, VCO1_TUNE)) {
-        static const unsigned kR[] = {2, 4, 8, 12};
+        static const uint8_t kR[] = {2, 4, 8, 12};
         op_fm(p, g, VCO1_TUNE, harmonic(st, g.pick(kR)), RAW(semis(1)), RAW(semis(6)),
               RAW(xdec(1000)), RAW(xdec(5000)), RAW(semis(4)));
     }
@@ -1699,7 +1706,7 @@ void am_bell(Patch &p, Gen &g)
 {
     /* ring-modulated bells: a sine whose level swings at a ratio of the
      * note -- harmonic or not -- the swing fading with the note */
-    static const int kOct[] = {-12, 0, 12, 12, 24};
+    static const int8_t kOct[] = {-12, 0, 12, 12, 24};
     const int st = g.pick(kOct);
     p.bases(KBASES(VCO1_VOL, 0, 0, VCO2_WAVE, RAW(kSine), 0x1800));
     p.base(VCO2_TUNE, tune(st));
@@ -1722,7 +1729,7 @@ void talk(Patch &p, Gen &g)
 {
     /* a talking, vowel-ish voice: saws into a resonant band-pass whose
      * cutoff and colour move -- a wah, a "yoi", a mouth */
-    static const int kOct[] = {-24, -12, -12, 0};
+    static const int8_t kOct[] = {-24, -12, -12, 0};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, RAW(kSquare), RAW(kSaw));
     p.base(VCO1_TUNE, tune(st));
@@ -1903,8 +1910,8 @@ void conga(Patch &p, Gen &g)
  * covers the bright two-note stabs) */
 void chord(Patch &p, Gen &g)
 {
-    static const int kInterval[] = {3, 7, 7, 10, 10, 14, 15, 17};
-    static const int kOct[] = {-12, -12, 0, 0, 0, 12};
+    static const int8_t kInterval[] = {3, 7, 7, 10, 10, 14, 15, 17};
+    static const int8_t kOct[] = {-12, -12, 0, 0, 0, 12};
     const int st = g.pick(kOct);
     p.base(VCO1_WAVE, rich(g));
     p.base(VCO1_TUNE, tune(st));
@@ -2091,7 +2098,7 @@ void bounce(Patch &p, Gen &g)
  * narrow band of one oscillator is quiet. */
 void vargan(Patch &p, Gen &g)
 {
-    static const unsigned kWave[] = {W_SINE, W_TRI, W_TRI, W_SH};
+    static const uint8_t kWave[] = {W_SINE, W_TRI, W_TRI, W_SH};
     p.base(VCO1_TUNE, tune(g.chance(60) ? -24 : -12));
     p.bases(KBASES(VCO1_WAVE, RAW(kSquare), RAW(kSaw), VCO1_VOL, 0xC000, 0xFFFF, VOLUME, 0xB000, 0xC800));
     p.filter(KFILTER(RAW(cutoff(84)), RAW(cutoff(104)), 0xB000, 0xE000, 0x2800, 0x6000, kFenv0, kFenv0));
@@ -2149,7 +2156,7 @@ void rumble(Patch &p, Gen &g)
 void brass(Patch &p, Gen &g)
 {
     static const int8_t kOct[] = {-12, -12, 0, 0, 0};
-    static const int kInterval[] = {0, 0, 0, 12, 7, -12};
+    static const int8_t kInterval[] = {0, 0, 0, 12, 7, -12};
     const int st = g.pick(kOct), iv = p.interval(st, kInterval);
     p.base(VCO1_TUNE, tune(st));
     p.base(VCO2_TUNE, tune(st + iv));
@@ -2331,7 +2338,7 @@ void spice(Patch &p, Gen &g)
             }
             break;
         case 12: {  /* every step a little different */
-            static const unsigned kSlot[] = {DECAY, FENV, CUTOFF};
+            static const uint8_t kSlot[] = {DECAY, FENV, CUTOFF};
             unsigned slot = g.pick(kSlot);
             if (slot == DECAY && p.v[DECAY][BASE] > RAW(env(600)))
                 slot = FENV;        /* a bell or a pad should ring as set */
@@ -2344,7 +2351,7 @@ void spice(Patch &p, Gen &g)
         }
         case 0:     /* the cutoff wanders, freely or with the tempo */
             if (untouched(p, CUTOFF)) {
-                static const unsigned kWave[] = {W_SINE, W_TRI, W_TRI, W_SAW, W_SQUARE, W_SH};
+                static const uint8_t kWave[] = {W_SINE, W_TRI, W_TRI, W_SAW, W_SQUARE, W_SH};
                 const bool sync = g.chance(40);
                 p.xmod(CUTOFF, g.pick(kWave), sync ? T_SYNCED : T_LFO,
                        sync ? division(g.irange(D_1, D_16)) : g.range(RAW(lfo_hz(0.05)), RAW(lfo_hz(4))),
@@ -2409,7 +2416,7 @@ void spice(Patch &p, Gen &g)
             }
             break;
         case 8: {   /* drive */
-            static const unsigned kVol[] = {VCO1_VOL, VCO2_VOL};
+            static const uint8_t kVol[] = {VCO1_VOL, VCO2_VOL};
             for (unsigned slot : kVol)
                 if (p.v[slot][BASE] >= 0x3000u)
                     p.base(slot, clamp16(int(p.v[slot][BASE]) + int(g.range(0x1000, 0x3800))));
@@ -2452,35 +2459,35 @@ enum Group : uint16_t {
 struct Entry {
     void (*make)(Patch &, Gen &);
     uint8_t weight;
-    uint8_t level;      /* p71: the instrument's gain in dB at zero features, 8 x dB + 64 (see leveled) */
+    uint8_t level;      /* LV3: unit-OutVol prediction intercept, dB = level/8 - 64 */
     uint16_t group;
 };
 const Entry kCatalogue[] = {
-    {kick, 12, 163, G_KICK}, {snare, 9, 147, G_HATS}, {clap, 6, 147, G_HATS},
-    {hat_closed, 9, 166, G_HATS}, {hat_open, 5, 138, G_HATS}, {tom, 5, 175, G_DRUMS},
-    {perc, 4, 158, G_DRUMS}, {bass, 9, 152, G_DEEP}, {acid, 5, 168, G_BASS}, {lead, 4, 144, G_TONAL},
-    {pad, 4, 130, G_TONAL}, {pluck, 5, 162, G_TONAL | G_PLUCK}, {bell, 4, 126, G_TONAL | G_PLUCK}, {zap, 4, 180, G_ZAP},
-    {stab, 4, 131, G_TONAL | G_PLUCK}, {glitch, 5, 128, G_ZAP},
+    {kick, 12, 188, G_KICK}, {snare, 9, 170, G_HATS}, {clap, 6, 201, G_HATS},
+    {hat_closed, 9, 194, G_HATS}, {hat_open, 5, 225, G_HATS}, {tom, 5, 172, G_DRUMS},
+    {perc, 4, 175, G_DRUMS}, {bass, 9, 208, G_DEEP}, {acid, 5, 214, G_BASS}, {lead, 4, 206, G_TONAL},
+    {pad, 4, 174, G_TONAL}, {pluck, 5, 186, G_TONAL | G_PLUCK}, {bell, 4, 176, G_TONAL | G_PLUCK}, {zap, 4, 158, G_ZAP},
+    {stab, 4, 206, G_TONAL | G_PLUCK}, {glitch, 5, 208, G_ZAP},
     /* p39 */
-    {cymbal, 4, 135, G_DRUMS}, {shaker, 4, 133, G_DRUMS}, {drop, 3, 220, G_DRUMS},
-    {fm_bass, 6, 146, G_DEEP | G_FM}, {reese, 4, 148, G_DEEP}, {wobble, 5, 172, G_BASS},
-    {growl, 4, 161, G_BASS}, {sync_lead, 4, 126, G_TONAL}, {hoover, 3, 115, G_TONAL},
-    {phaser_pad, 3, 165, G_TONAL}, {gate, 4, 109, G_TONAL}, {fm_ep, 4, 145, G_TONAL | G_PLUCK},
-    {mallet, 4, 116, G_TONAL | G_PLUCK}, {bleeps, 4, 139, G_ZAP}, {riser, 3, 189, G_OTHER}, {siren, 3, 124, G_OTHER},
-    {drone, 3, 185, G_TONAL},
+    {cymbal, 4, 197, G_DRUMS}, {shaker, 4, 210, G_DRUMS}, {drop, 3, 110, G_DRUMS},
+    {fm_bass, 6, 208, G_DEEP | G_FM}, {reese, 4, 209, G_DEEP}, {wobble, 5, 214, G_BASS},
+    {growl, 4, 234, G_BASS}, {sync_lead, 4, 186, G_TONAL}, {hoover, 3, 215, G_TONAL},
+    {phaser_pad, 3, 173, G_TONAL}, {gate, 4, 237, G_TONAL}, {fm_ep, 4, 186, G_TONAL | G_PLUCK},
+    {mallet, 4, 195, G_TONAL | G_PLUCK}, {bleeps, 4, 223, G_ZAP}, {riser, 3, 162, G_OTHER}, {siren, 3, 188, G_OTHER},
+    {drone, 3, 155, G_TONAL},
     /* p43 */
-    {metal_perc, 4, 148, G_DRUMS}, {am_bell, 3, 137, G_TONAL | G_PLUCK}, {talk, 3, 133, G_TONAL},
-    {wind, 2, 223, G_OTHER}, {crackle, 2, 122, G_OTHER}, {bass808, 5, 163, G_DEEP},
+    {metal_perc, 4, 168, G_DRUMS}, {am_bell, 3, 184, G_TONAL | G_PLUCK}, {talk, 3, 199, G_TONAL},
+    {wind, 2, 148, G_OTHER}, {crackle, 2, 201, G_OTHER}, {bass808, 5, 204, G_DEEP},
     /* p54 */
-    {cowbell, 3, 110, G_DRUMS}, {rim, 4, 171, G_DRUMS}, {conga, 4, 163, G_DRUMS}, {chord, 4, 128, G_TONAL | G_PLUCK},
+    {cowbell, 3, 224, G_DRUMS}, {rim, 4, 169, G_DRUMS}, {conga, 4, 183, G_DRUMS}, {chord, 4, 211, G_TONAL | G_PLUCK},
     /* p64 */
-    {syncussion, 4, 169, G_SYN},
+    {syncussion, 4, 175, G_SYN},
     /* p66 */
-    {organ, 4, 78, G_TONAL}, {gong, 3, 147, G_TONAL | G_PLUCK}, {bounce, 4, 137, G_BASS}, {vargan, 3, 158, G_TONAL},
+    {organ, 4, 248, G_TONAL}, {gong, 3, 180, G_TONAL | G_PLUCK}, {bounce, 4, 231, G_BASS}, {vargan, 3, 222, G_TONAL},
     /* p69 */
-    {rumble, 3, 157, G_DEEP | G_OTHER}, {brass, 4, 134, G_TONAL}, {flute, 3, 98, G_TONAL}, {bowl, 3, 123, G_TONAL | G_PLUCK},
+    {rumble, 3, 217, G_DEEP | G_OTHER}, {brass, 4, 187, G_TONAL}, {flute, 3, 224, G_TONAL}, {bowl, 3, 164, G_TONAL | G_PLUCK},
     /* p70 */
-    {sub, 4, 184, G_DEEP}, {deep, 4, 153, G_DEEP},
+    {sub, 4, 196, G_DEEP}, {deep, 4, 220, G_DEEP},
 };
 constexpr unsigned kInstruments = sizeof kCatalogue / sizeof kCatalogue[0];
 
@@ -2525,29 +2532,48 @@ const Style *stored_style()
     return s && s <= kStyles ? &kStyle[s - 1u] : nullptr;
 }
 
-/* p50/p51: the instruments level with one another -- one level each, from
- * bench renders.  p71 LV2: that was not enough.  A survey on the bench
- * (1,296 forced draws, 24 of every instrument; loudness = the mean of the
- * K-weighted maxima over 100 ms and 400 ms) put the spread inside an
- * instrument at 6.7 dB std against 3.5 between instruments: draws of one
- * recipe differ by more than recipes do.  Now the level comes from the
- * patch itself: a linear model of nine knob values predicts its loudness
- * at full VOLUME -- the louder heard VCO's level, ENV AMOUNT up, the colour
- * towards band-pass, the decay, sustain and attack (six knob values: three
- * more -- both VCOs heard, the cutoff over the pitch, high-pass -- took the
- * spread only from 5.8 to 5.7 dB) -- and Entry::level holds the instrument's
- * own term (its gain in dB at zero features, 8 x dB + 64).  VOLUME is set
- * so the prediction meets one target (never over full), and VOLUME's X-Mod
- * and X-Env depths follow the base by the cube root of the gain (depths are
- * cubic), as p51's did.  Cross-validated on the survey: spread 7.7 -> 5.8
- * dB std, 10..90 % range 16.8 -> 12.6 dB, draws 10+ dB over / 15+ dB under
- * the median 3 % / 5 % -> 1 % / 3 %, the generator ~3 dB quieter overall
- * (the room to lift the quiet ones).  The VCA follows VOLUME linearly
- * (bench: each halving -6.0 dB). */
-/* dB x 2^24 per raw unit: the louder heard VCO's level, ENV AMOUNT over
- * centre, COLOR under centre (towards band-pass), DECAY, SUSTAIN, ATTACK */
-const int16_t kLoudW[6] = {3338, 2191, -4136, 5504, 928, -4916};
+/* LV3 (p73): all 54 recipes share a robust, generation-time predictor,
+ * with their own intercepts. Fit on 1,296 actual ARM-generated draws with
+ * the corrected ADSR-once / emitted-DAC-word bench, four-fold validation.
+ * Features and coefficients: tools/bench/fit_levels.py; independent draws
+ * validate the rebuilt firmware. This is an analog-model estimate, not
+ * a hardware loudness measurement. No work/state is added to audio/IRQs.
+ *
+ * p75: the p73 -36 dB common target was too quiet on hardware. Prefer a
+ * high normal level and reduce predicted loud outliers: use 95% OutVol
+ * when the unit-gain prediction is <= -16 dB, attenuate above that. The
+ * metric is the bench's mean K-weighted 100/400 ms maximum, not hardware
+ * dBFS. This is a generation-time gain cap, not an audio peak limiter.
+ * Quiet sounds may stay quiet; there is no attempt to match them all.
+ * Only newly generated VOLUME base/depths change; saved notes stay intact. */
 bool sounds(const Patch &p, unsigned vol);
+
+float loudness(const Patch &p, unsigned what)
+{
+    const auto &v = p.v;
+    const unsigned a = v[VCO1_VOL][BASE], b = v[VCO2_VOL][BASE];
+    const float bp = v[COLOR][BASE] < 0x8000u ? float(0x8000u - v[COLOR][BASE]) * (1.f / 32768) : 0.f;
+    const float hp = v[COLOR][BASE] > 0x8000u ? float(v[COLOR][BASE] - 0x8000u) * (1.f / 32768) : 0.f;
+    const float cut = float(v[CUTOFF][BASE]) * (1.f / 256);
+    float high = (cut - 96.f) * (1.f / 24);
+    high = high < 0.f ? 0.f : high > 3.f ? 3.f : high;
+    float pitch = float(v[VCO1_TUNE][BASE]);
+    if (sounds(p, VCO2_VOL) && (!sounds(p, VCO1_VOL) || v[VCO2_TUNE][BASE] < pitch))
+        pitch = float(v[VCO2_TUNE][BASE]);
+    pitch = (pitch * (1.f / 256) + float(p.cx->played - 60) - 57.f) * (1.f / 24);
+    const float env = float(int(v[FENV][BASE]) - 0x8000) * (1.f / 32768);
+    return float(kCatalogue[what].level) * .125f - 64.f
+        + 14.404582f * (float(v[DECAY][BASE]) * (1.f / 65536))
+        + 8.383779f * (float(a > b ? a : b) * (1.f / 65536))
+        - 11.003980f * bp
+        + 14.766019f * (float(v[CUTOFF][BASE]) * (1.f / 65536))
+        - 8.063178f * high * hp
+        + 6.444278f * (float(v[RELEASE][BASE]) * (1.f / 65536))
+        + 5.115075f * env * env * env
+        + 3.867361f * (float(a < b ? a : b) * (1.f / 65536))
+        + 1.918238f * (pitch < 0.f ? pitch : 0.f)
+        - 6.118202f * (float(v[ATTACK][BASE]) * (1.f / 65536));
+}
 
 /* 2^x for x <= 0 */
 float exp2_down(float x)
@@ -2562,22 +2588,26 @@ float exp2_down(float x)
 void leveled(Patch &p, unsigned what)
 {
     auto &v = p.v;
-    int lvl = 0;
-    for (unsigned vol = VCO1_VOL; vol <= VCO2_VOL; vol += VCO2_VOL - VCO1_VOL)
-        if (sounds(p, vol) && v[vol][BASE] > lvl)
-            lvl = v[vol][BASE];
-    const int fenv = int(v[FENV][BASE]) - 0x8000, bp = 0x8000 - int(v[COLOR][BASE]);
-    /* the gain VOLUME needs, dB x 2^24: the instrument's own term less the
-     * patch's predicted loudness */
-    const int x = (int(kCatalogue[what].level) - 64) * (1 << 21) -
-                  (kLoudW[0] * lvl + kLoudW[1] * (fenv > 0 ? fenv : 0) + kLoudW[2] * (bp > 0 ? bp : 0) +
-                   kLoudW[3] * int(v[DECAY][BASE]) + kLoudW[4] * int(v[SUSTAIN][BASE]) + kLoudW[5] * int(v[ATTACK][BASE]));
-    const float vol = x < 0 ? exp2_down(float(x) * (1.f / (6.0206f * 16777216.f))) : 1.f;
+    float db = -16.f - loudness(p, what);
+    /* Bound exp2's exponent and the smallest generated gain. */
+    db = db < -48.f ? -48.f : db;
+    float vol = .95f * (db < 0.f ? exp2_down(db * (1.f / 6.0206f)) : 1.f);
     uint16_t *vv = v[VOLUME];
-    const float k = vol * 65535.f / float(vv[BASE] ? vv[BASE] : 1u);
+    const float old = float(vv[BASE] ? vv[BASE] : 1u);
+    const float k = vol * 65535.f / old;
     float c = 1.f;
-    for (unsigned i = 0; i < 6u; ++i)
+    for (unsigned i = 0; i < 7u; ++i)
         c = (2.f * c + k / (c * c)) * (1.f / 3);
+    /* A boost must not saturate a raw modulation depth: that would change
+     * a clap's gaps / tremolo contour instead of scaling its level. */
+    for (unsigned l = XMOD_AMT; l <= XENV_AMT; l += XENV_AMT - XMOD_AMT) {
+        const int d = int(vv[l]) - 0x8000;
+        const float limit = d < 0 ? -32768.f : 32767.f;
+        if ((d < 0 && float(d) * c < limit) || (d > 0 && float(d) * c > limit)) {
+            c = limit / float(d);
+            vol = old * c * c * c * (1.f / 65535);
+        }
+    }
     vv[BASE] = uint16_t(clamp16(int(vol * 65535.f + 0.5f)));
     for (unsigned l = XMOD_AMT; l <= XENV_AMT; l += XENV_AMT - XMOD_AMT)
         vv[l] = uint16_t(clamp16(0x8000 + int(float(int(vv[l]) - 0x8000) * c)));
@@ -2852,6 +2882,36 @@ float up_st(unsigned raw)
     return x > 0.f ? 149.f * x * x * x : 0.f;
 }
 
+/* p72: condition only newly generated hats/subs, after kit seasoning and
+ * spice. OutVol cannot recover a hat high-passed above the audible band;
+ * nor can a constant gain predict a sub's slow filter closing over a note.
+ * The 12-st offset between cutoff and pitch is included in both bounds.
+ * This does not run on saved sounds, on note-on, or in the audio IRQ. */
+void audible_filter(Patch &p, unsigned what)
+{
+    auto &v = p.v;
+    if (what == 3u || what == 4u) {
+        /* 7.04 kHz at the note the patch is generated for. Unlike cutoff(),
+         * which assumes C4, account for custom mod-note pitches and kits. */
+        const unsigned top = unsigned(186 - p.cx->played) * 256u;
+        if (v[CUTOFF][BASE] > top)
+            v[CUTOFF][BASE] = uint16_t(top);
+    }
+    if (what == 52u) {
+        const unsigned xm = v[CUTOFF][XMOD_AMT], xe = v[CUTOFF][XENV_AMT];
+        const unsigned down = v[CUTOFF][XENV_DEST] && xe > 0x8000u ? xe : 0x10000u - xe;
+        const float closing = up_st(xm > 0x8000u ? xm : 0x10000u - xm) + up_st(down) +
+                              up_st(0x10000u - v[FENV][BASE]);
+        /* Preserve two octaves over VCO1 even at the direct cutoff
+         * modulation's low extreme. Keep its wave/rate/depth, and keep the
+         * VCO pitch, so a sub remains a sub; move only the filter's base.
+         * Secondary modulation of FENV itself is outside this bound. */
+        const unsigned floor = clamp16(int(float(v[VCO1_TUNE][BASE]) + (36.f + closing) * 256.f + 0.5f));
+        if (v[CUTOFF][BASE] < floor)
+            v[CUTOFF][BASE] = uint16_t(floor);
+    }
+}
+
 /* a VCO is heard: its level up, or an X-Env lifting it, or an X-Mod moving it */
 bool sounds(const Patch &p, unsigned vol)
 {
@@ -2942,6 +3002,7 @@ void instrument(Patch &p, Gen &g, Context &cx, unsigned what)
         diag(D_MNRAND_MUTED) += 1u;
     }
     tempo_fit(p);
+    audible_filter(p, what);
     leveled(p, what);
 }
 
@@ -2987,7 +3048,7 @@ void season(Patch &p, const Kit &k)
     add(DECAY, k.room, 0xFFFF);
     add(RELEASE, k.room, 0xFFFF);
     add(CUTOFF, k.bright * 256, (149 - 3) * 256);
-    static const unsigned kVol[] = {VCO1_VOL, VCO2_VOL};
+    static const uint8_t kVol[] = {VCO1_VOL, VCO2_VOL};
     for (unsigned slot : kVol)
         if (p.v[slot][BASE] >= 0x3000u)       /* only an oscillator that sounds */
             add(slot, k.drive, 0xFFFF);
@@ -3040,6 +3101,7 @@ void generate_kit(void *mgr, unsigned tag, unsigned page)
         season(p, kit);
         deeper_fm(p);
         tempo_fit(p);
+        audible_filter(p, what);
         leveled(p, what);
         emit(mgr, tag, note, p, what, G_KICK);
     }

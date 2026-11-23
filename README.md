@@ -59,8 +59,8 @@ flashing the official update the same way.
 - **Synced LFOs.**
   - They follow tempo changes continuously.
   - A synced S&H steps on every division.
-  - Eleven divisions, from 1/1. to 1/32 and including a dotted eighth that
-    the stock table lacks, all retrigger exactly under external MIDI clock.
+  - Twelve divisions, from 1/1. to 1/32, including dotted eighth and quarter
+    notes, with integer MIDI-clock pulse boundaries for every division.
     See [docs/sync-table.md](docs/sync-table.md).
 
 ### The mod-note instrument generator
@@ -401,7 +401,27 @@ sequencer timers. See [docs/sysemu.md](docs/sysemu.md). The sound tests
 (`test_modnote_random.py`, `test_patch_random.py`) run for tens of minutes.
 
 `tools/bench` renders what the firmware asks of the voice through a digital
-stand-in for the analog circuit, for listening and loudness measurements.
+stand-in for the analog circuit. Its WAV previews are peak-normalised;
+compare levels with the unnormalised survey instead:
+
+```bash
+build/venv/bin/python tests/test_bench_levels.py --firmware --fast-firmware
+build/venv/bin/python tools/bench/levels.py kick clap pad --draws 4 --out build/bench/levels-check
+```
+
+The survey retains seeds, parameters, image hashes, CV traces and raw audio.
+It measures the model, not the analog hardware. The November 22 audit fixed
+an extra ADSR multiplication in the renderer; previous loudness figures need
+revalidation. See the [loudness audit](docs/patches.md#loudness-bench-audit-2026-11-22-firmware-unchanged).
+
+The p75 build keeps the **54-type** gain predictor but raises the output:
+ordinary draws can use 95% base Volume, with attenuation for predicted loud
+outliers. Quiet draws may remain quiet. Generate new sounds: saved sounds
+are not rewritten. It retains p74's dotted LFO divisions and uses 524,064
+bytes, leaving 224 bytes below the bootloader cap. No new tests or audio
+measurements were run for this policy change.
+See [p75 output policy](docs/patches.md#high-output-generator-cap-p75--2026-11-24)
+and [p73 model and measurements](docs/patches.md#lv3-all-54-generated-instrument-levels-p73--2026-11-23).
 
 ---
 

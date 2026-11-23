@@ -1,0 +1,471 @@
+{
+  "draws": 432,
+  "recipes": 54,
+  "before": {
+    "std": 6.064075957422081,
+    "p10p90": 12.52525776894441,
+    "median": -29.184848792489372,
+    "class_median_span": 13.07020390402015,
+    "class_median_std": 2.5014625721749724,
+    "min": -74.97927759892448,
+    "max": -14.567791939471153
+  },
+  "after": {
+    "std": 5.1079696386241285,
+    "p10p90": 10.610159057461154,
+    "median": -36.0557730314197,
+    "class_median_span": 12.684770583903827,
+    "class_median_std": 2.092257949724806,
+    "min": -74.97927759892448,
+    "max": -24.693899114792274
+  },
+  "median_shift_db": -6.870924238930325,
+  "median_relative_outliers": {
+    "before_loud_6db": 34,
+    "after_loud_6db": 27,
+    "before_quiet_10db": 29,
+    "after_quiet_10db": 14
+  },
+  "base_volume_boosts": 4,
+  "base_volume_cuts": 422,
+  "before_survey_sha256": "5f123406a4d280839e1b60672fff1fb65f797010d7770984d6a7e528235400fd",
+  "after_survey_sha256": "93cc108a4571944d182c2f233ab022334c3065b590c40969d92677be83b75cce",
+  "before_image": "924f4c29da175121a965167949163a9e4d84fcd075b9df672c83b15fcdacf745",
+  "after_image": "ce2ba6a4c603a7e9661ab94f57e6368176cddab43ab82794b42878f840ed22d4",
+  "renderer_sha256": "6f908be56e4884cd39c3131dbaa03959141d18d4fe25e4f4623f9307d4df9a60",
+  "per_recipe": [
+    {
+      "name": "kick",
+      "draws": 8,
+      "before_median": -28.655568972030864,
+      "after_median": -36.02767172172396,
+      "before_std": 2.7230870359075134,
+      "after_std": 2.294394498994225
+    },
+    {
+      "name": "snare",
+      "draws": 8,
+      "before_median": -30.585728460386665,
+      "after_median": -33.56313157753574,
+      "before_std": 2.9599687566130686,
+      "after_std": 2.1861266804967245
+    },
+    {
+      "name": "clap",
+      "draws": 8,
+      "before_median": -30.528357337629245,
+      "after_median": -37.47888045467295,
+      "before_std": 3.188732742006435,
+      "after_std": 2.2090673143440855
+    },
+    {
+      "name": "hat-closed",
+      "draws": 8,
+      "before_median": -25.517031846030605,
+      "after_median": -36.24041790946886,
+      "before_std": 6.27495292126753,
+      "after_std": 3.546905238362141
+    },
+    {
+      "name": "hat-open",
+      "draws": 8,
+      "before_median": -25.64286629670569,
+      "after_median": -36.72215283531299,
+      "before_std": 5.266030997017747,
+      "after_std": 3.6033029967632926
+    },
+    {
+      "name": "tom",
+      "draws": 8,
+      "before_median": -33.174968265566974,
+      "after_median": -41.21807741820298,
+      "before_std": 8.067847655868587,
+      "after_std": 6.200533741311136
+    },
+    {
+      "name": "perc",
+      "draws": 8,
+      "before_median": -25.42111245544078,
+      "after_median": -35.06356153249688,
+      "before_std": 16.71465470676286,
+      "after_std": 13.431697907287283
+    },
+    {
+      "name": "bass",
+      "draws": 8,
+      "before_median": -25.857043667763264,
+      "after_median": -32.161219160671145,
+      "before_std": 3.612164350398143,
+      "after_std": 2.7223311599774025
+    },
+    {
+      "name": "acid",
+      "draws": 8,
+      "before_median": -26.214136031750904,
+      "after_median": -33.09706142381812,
+      "before_std": 3.1079566532893734,
+      "after_std": 2.154148697713252
+    },
+    {
+      "name": "lead",
+      "draws": 8,
+      "before_median": -26.286325770070803,
+      "after_median": -37.498340450198086,
+      "before_std": 5.86587467431004,
+      "after_std": 3.9525472544361078
+    },
+    {
+      "name": "pad",
+      "draws": 8,
+      "before_median": -38.49131635946093,
+      "after_median": -44.84598974457497,
+      "before_std": 10.928687573566284,
+      "after_std": 8.896991966253008
+    },
+    {
+      "name": "pluck",
+      "draws": 8,
+      "before_median": -28.851107918268376,
+      "after_median": -36.779527372962825,
+      "before_std": 3.2613706234928017,
+      "after_std": 3.4838876225692212
+    },
+    {
+      "name": "bell",
+      "draws": 8,
+      "before_median": -30.11114804250692,
+      "after_median": -34.97021255365955,
+      "before_std": 2.644652755128275,
+      "after_std": 3.346439949966754
+    },
+    {
+      "name": "zap",
+      "draws": 8,
+      "before_median": -30.159857650312425,
+      "after_median": -38.87515731365562,
+      "before_std": 7.291656643391459,
+      "after_std": 6.1465862405399
+    },
+    {
+      "name": "stab",
+      "draws": 8,
+      "before_median": -27.592719380948104,
+      "after_median": -34.11400660944179,
+      "before_std": 5.782257407429667,
+      "after_std": 5.530253192132517
+    },
+    {
+      "name": "glitch",
+      "draws": 8,
+      "before_median": -29.379251494677074,
+      "after_median": -35.531300210135726,
+      "before_std": 3.2068411288065453,
+      "after_std": 3.8019619629316854
+    },
+    {
+      "name": "cymbal",
+      "draws": 8,
+      "before_median": -30.681857200800078,
+      "after_median": -38.31634727453323,
+      "before_std": 8.35043540715175,
+      "after_std": 5.645337248177975
+    },
+    {
+      "name": "shaker",
+      "draws": 8,
+      "before_median": -30.48279192787751,
+      "after_median": -34.1313660135999,
+      "before_std": 8.1709241481518,
+      "after_std": 6.411626531251707
+    },
+    {
+      "name": "drop",
+      "draws": 8,
+      "before_median": -38.06471665474156,
+      "after_median": -38.06471665474156,
+      "before_std": 12.425006676522047,
+      "after_std": 11.382938915587097
+    },
+    {
+      "name": "fm-bass",
+      "draws": 8,
+      "before_median": -31.6829834144474,
+      "after_median": -34.9085260840268,
+      "before_std": 1.9707046573117757,
+      "after_std": 2.7754061612513814
+    },
+    {
+      "name": "reese",
+      "draws": 8,
+      "before_median": -30.16476624649554,
+      "after_median": -35.97906280371373,
+      "before_std": 4.177937687435238,
+      "after_std": 3.8472068016296017
+    },
+    {
+      "name": "wobble",
+      "draws": 8,
+      "before_median": -28.777925155360883,
+      "after_median": -34.138181324017175,
+      "before_std": 5.67888681542126,
+      "after_std": 3.905910589234288
+    },
+    {
+      "name": "growl",
+      "draws": 8,
+      "before_median": -27.890471505631105,
+      "after_median": -38.46645370087161,
+      "before_std": 3.397498308603939,
+      "after_std": 4.0668907926260385
+    },
+    {
+      "name": "sync-lead",
+      "draws": 8,
+      "before_median": -30.35011886675455,
+      "after_median": -36.09627002333505,
+      "before_std": 6.39942292057825,
+      "after_std": 5.87430604910846
+    },
+    {
+      "name": "hoover",
+      "draws": 8,
+      "before_median": -29.108503322329568,
+      "after_median": -37.307127336870366,
+      "before_std": 3.7452019908950542,
+      "after_std": 2.72381884565025
+    },
+    {
+      "name": "phaser-pad",
+      "draws": 8,
+      "before_median": -25.64754041475591,
+      "after_median": -34.62077245985281,
+      "before_std": 3.844957724238903,
+      "after_std": 4.469792026301867
+    },
+    {
+      "name": "gate",
+      "draws": 8,
+      "before_median": -30.180165044671146,
+      "after_median": -37.03609050876885,
+      "before_std": 4.800915830161703,
+      "after_std": 4.009132227555582
+    },
+    {
+      "name": "fm-ep",
+      "draws": 8,
+      "before_median": -29.739259316398172,
+      "after_median": -36.75648424372221,
+      "before_std": 3.514295124862561,
+      "after_std": 3.6436255133850675
+    },
+    {
+      "name": "mallet",
+      "draws": 8,
+      "before_median": -29.862894229733662,
+      "after_median": -36.686006923877706,
+      "before_std": 2.9397887861854928,
+      "after_std": 2.379728322615135
+    },
+    {
+      "name": "bleeps",
+      "draws": 8,
+      "before_median": -26.859341282807275,
+      "after_median": -35.71550100088963,
+      "before_std": 2.413598724569928,
+      "after_std": 3.4595724419027545
+    },
+    {
+      "name": "riser",
+      "draws": 8,
+      "before_median": -27.450567136797147,
+      "after_median": -32.53731075679927,
+      "before_std": 5.2080806104969595,
+      "after_std": 5.936956229658606
+    },
+    {
+      "name": "siren",
+      "draws": 8,
+      "before_median": -27.042300092774575,
+      "after_median": -35.224476318288644,
+      "before_std": 2.722080492141946,
+      "after_std": 2.6641914240831195
+    },
+    {
+      "name": "drone",
+      "draws": 8,
+      "before_median": -27.08426162297345,
+      "after_median": -36.55334240399607,
+      "before_std": 4.354274986584566,
+      "after_std": 3.659493863173145
+    },
+    {
+      "name": "metal",
+      "draws": 8,
+      "before_median": -30.36200870494829,
+      "after_median": -33.75908116695102,
+      "before_std": 6.510541130813873,
+      "after_std": 7.2835785788586875
+    },
+    {
+      "name": "am-bell",
+      "draws": 8,
+      "before_median": -30.563064990221655,
+      "after_median": -36.88416644124682,
+      "before_std": 3.325762102838145,
+      "after_std": 2.4735676306038936
+    },
+    {
+      "name": "talk",
+      "draws": 8,
+      "before_median": -30.299427734284347,
+      "after_median": -33.68490867440964,
+      "before_std": 5.576446718641594,
+      "after_std": 3.0897080029750796
+    },
+    {
+      "name": "wind",
+      "draws": 8,
+      "before_median": -28.174733005450587,
+      "after_median": -36.93196410320339,
+      "before_std": 6.447628795788101,
+      "after_std": 6.150906785818313
+    },
+    {
+      "name": "crackle",
+      "draws": 8,
+      "before_median": -29.391204391602756,
+      "after_median": -36.226123952676154,
+      "before_std": 6.044306348041138,
+      "after_std": 5.648906345905657
+    },
+    {
+      "name": "808",
+      "draws": 8,
+      "before_median": -29.13268442373731,
+      "after_median": -36.6948960033428,
+      "before_std": 2.0147241988422286,
+      "after_std": 2.383720111861081
+    },
+    {
+      "name": "cowbell",
+      "draws": 8,
+      "before_median": -31.767901203702895,
+      "after_median": -39.2714796586579,
+      "before_std": 3.76350027530394,
+      "after_std": 3.7078374578784943
+    },
+    {
+      "name": "rim",
+      "draws": 8,
+      "before_median": -29.85098017518411,
+      "after_median": -36.7246216968637,
+      "before_std": 4.694129800227189,
+      "after_std": 3.0955655364063506
+    },
+    {
+      "name": "conga",
+      "draws": 8,
+      "before_median": -27.895963951372764,
+      "after_median": -37.49043152437399,
+      "before_std": 1.1376376871234015,
+      "after_std": 1.775415186416383
+    },
+    {
+      "name": "chord",
+      "draws": 8,
+      "before_median": -30.199292388200664,
+      "after_median": -36.75301739771591,
+      "before_std": 2.4104527505120927,
+      "after_std": 1.430252052946399
+    },
+    {
+      "name": "syncussion",
+      "draws": 8,
+      "before_median": -28.367714075554794,
+      "after_median": -34.29839294072059,
+      "before_std": 4.313792129833821,
+      "after_std": 3.7288238959994704
+    },
+    {
+      "name": "organ",
+      "draws": 8,
+      "before_median": -31.068569165070507,
+      "after_median": -36.18068885635556,
+      "before_std": 4.0410755612853,
+      "after_std": 3.0531671617527767
+    },
+    {
+      "name": "gong",
+      "draws": 8,
+      "before_median": -31.32242066220747,
+      "after_median": -36.17736038008562,
+      "before_std": 1.8016039814590492,
+      "after_std": 2.0207372967654402
+    },
+    {
+      "name": "bounce",
+      "draws": 8,
+      "before_median": -28.16049504024271,
+      "after_median": -34.80474665039333,
+      "before_std": 2.56067739417048,
+      "after_std": 2.8487742106553604
+    },
+    {
+      "name": "vargan",
+      "draws": 8,
+      "before_median": -31.404737077783217,
+      "after_median": -37.92720346673097,
+      "before_std": 5.02324299992522,
+      "after_std": 4.545049134852191
+    },
+    {
+      "name": "rumble",
+      "draws": 8,
+      "before_median": -29.821051313055158,
+      "after_median": -35.4172387384654,
+      "before_std": 3.587737361048651,
+      "after_std": 2.2907541816444734
+    },
+    {
+      "name": "brass",
+      "draws": 8,
+      "before_median": -29.222681174185617,
+      "after_median": -34.506248844797085,
+      "before_std": 2.1966501323328265,
+      "after_std": 1.8028029574584812
+    },
+    {
+      "name": "flute",
+      "draws": 8,
+      "before_median": -30.36277656854375,
+      "after_median": -35.55668260644614,
+      "before_std": 2.708915412929748,
+      "after_std": 2.3987548985708558
+    },
+    {
+      "name": "bowl",
+      "draws": 8,
+      "before_median": -28.863268063526338,
+      "after_median": -34.85497767971883,
+      "before_std": 1.1086801121374292,
+      "after_std": 1.160183253097161
+    },
+    {
+      "name": "sub",
+      "draws": 8,
+      "before_median": -31.45707823881331,
+      "after_median": -34.72499328215447,
+      "before_std": 2.541347348342013,
+      "after_std": 1.722421514597103
+    },
+    {
+      "name": "deep",
+      "draws": 8,
+      "before_median": -29.900151144881608,
+      "after_median": -35.565000971466766,
+      "before_std": 2.6614189791040523,
+      "after_std": 2.8168894541849956
+    }
+  ],
+  "limits": "Uncalibrated analog model, C4, stopped transport, 300 ms gate. Noise trajectories may differ. No hardware-cycle/loudness claim."
+}

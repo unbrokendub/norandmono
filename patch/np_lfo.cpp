@@ -115,28 +115,26 @@ typedef float (*ParamValueFn)(void *project, unsigned index);
  * handler does at 0x0811CCD6. */
 constexpr uintptr_t kDefaultRetrig = 0x0811BA3Du;
 
-/* Eleven sync divisions.  Ten come from the stock table of fifteen at
- * 0x0815F320; dropped by choice: 2/1, 1/4 dotted, the 1/16 quintuplet, the
- * 1/32 triplet and 1/64 -- the extremes nobody reached for and the two
- * awkward ones.  The eleventh, 1/8 dotted, is not in the stock table at all;
- * it is added here.  In knob order:
+/* Twelve sync divisions.  Eleven come from the stock table of fifteen at
+ * 0x0815F320, including the restored dotted quarter.  The dotted eighth
+ * is new.  In knob order:
  *
- *     1/1.  1/1  1/2.  1/2  1/4  1/8.  1/4T  1/8  1/8T  1/16  1/32
+ *     1/1.  1/1  1/2.  1/2  1/4.  1/4  1/8.  1/4T  1/8  1/8T  1/16  1/32
  *
- * eleven detents of 9.1 % each instead of fifteen of 6.7 %, and every one
+ * twelve detents of 8.3 % each instead of fifteen of 6.7 %, and every one
  * of them has a whole number of MIDI pulses per cycle, so the fractional
  * realignment case is gone.
  *
- * The values are engine ticks per cycle (a quarter note is 1024).  The ten
+ * The values are engine ticks per cycle (a quarter note is 1024).  The eleven
  * stock ones are the same floats as the stock table, bit for bit: 2048/3
  * and 1024/3 round to exactly the stock 682.6667 and 341.3333.
  *
- * 1/8 dotted sits between 1/4 and 1/4T, so the centre of each of the old
- * ten 10 % detents still selects the division it did; only positions near
- * the edges of 1/4 and 1/4T move to it. */
-constexpr unsigned kDivCount = 11u;
+ * Adding 1/4 dotted changes the old detent centres too. np_mnrand.cpp
+ * encodes the new centres explicitly to preserve its recipes' divisions.
+ * Saved raw Rate values retain their value, but can select another division. */
+constexpr unsigned kDivCount = 12u;
 const float kDivTicks[kDivCount] = {
-    6144.0f, 4096.0f, 3072.0f, 2048.0f, 1024.0f, 768.0f,
+    6144.0f, 4096.0f, 3072.0f, 2048.0f, 1536.0f, 1024.0f, 768.0f,
     2048.0f / 3.0f, 512.0f, 1024.0f / 3.0f, 256.0f, 128.0f,
 };
 
@@ -146,9 +144,9 @@ const float kDivTicks[kDivCount] = {
  * truncates it to u32 and passes that as `pos`, then adds 42.666666... to
  * it (the literal at 0x08118D68 is exactly 128/3).  So one quarter note is
  * 24 * 128/3 = 1024 engine ticks, and each period is division / (128/3).
- * All eleven are whole numbers; 1/8 dotted is 768 ticks, 18 pulses. */
+ * All twelve are whole numbers: 1/4 dotted is 36 pulses, 1/8 dotted 18. */
 const uint16_t kPulseNumerator[kDivCount] = {
-    144u, 96u, 72u, 48u, 24u, 18u, 16u, 12u, 8u, 6u, 3u,
+    144u, 96u, 72u, 48u, 36u, 24u, 18u, 16u, 12u, 8u, 6u, 3u,
 };
 
 /* The accumulator advances by 128/3 per pulse and `pos` is its floor, so

@@ -1103,6 +1103,458 @@ at every block offset.  Cost +75..+144 instructions per audio block.
 
 ---
 
+## High-output generator cap (p75 — 2026-11-24)
+
+Hardware feedback: the p73/p74 common level was much too quiet. The user
+now prioritizes high output with fewer loud outliers and accepts quiet
+draws. p75 keeps the same 54-recipe predictor but changes its output policy:
+
+`OutVol = 0.95 * min(1, 10^((-16 - predicted_unit_level) / 20))`.
+
+The existing exp2 approximation and 48 dB attenuation bound implement this.
+Sounds predicted at or below -16 dB use 95% base Volume; higher predictions
+are attenuated. These are the model's window-level units, not calibrated
+hardware dBFS or a peak limit. The effective predicted ceiling including
+0.95 is approximately -16.45 dB, versus p73's -36 dB target. The nominal
+change is up to about +19.55 dB before unity/modulation-depth limits; it is
+not a measured increase for every instrument. Depths continue to scale
+with volume, and the existing headroom check can reduce a requested boost
+to preserve the raw X-Mod/X-Env depth ratio.
+
+This is a generator-time gain choice, not a compressor observing audio.
+No new sound renders, emulation or test suites were run at the user's
+request. Only the existing build integrity checks ran. The saved p72
+survey was read to inform the policy; there are no new measurement claims.
+The model coefficients and p73 validation in `docs/loudness-model.json`
+remain historical: its `target: -36` is not p75's active policy.
+
+For more accurate future calibration, record the physical Mono output for
+many generated variants and fit attenuation to the loud tail rather than
+forcing the whole catalogue down to its quietest types. The current analog
+stand-in cannot guarantee suppression of every real loud outlier.
+
+Artifact: `build/mono_V2.2.0r-p75-loud-generator.syx`. Image **524,064
+bytes**, **224 bytes free**, build ID `099A3A15`. The p74 dotted LFO values
+are retained. Only newly generated sounds use the new gain choice;
+existing saved parameters are not boosted or rewritten. Source, image,
+ELF and build provenance are preserved in `build/p75-loud-generator/`.
+
+## Dotted sync divisions (p74 — 2026-11-24)
+
+[PR #1](https://github.com/unbrokendub/norandmono/pull/1), adding `1/8.`,
+was merged as `26df26276ed10dafe7f61e7f76dabd2e12548b04`. The local p74
+build also restores `1/4.` and retains the uncommitted p72/p73 work.
+The twelve divisions are:
+
+`1/1. 1/1 1/2. 1/2 1/4. 1/4 1/8. 1/4T 1/8 1/8T 1/16 1/32`.
+
+The new dotted periods are 1536/768 ticks, or 36/18 MIDI Clock pulses.
+Generator recipes retain their original ten duration choices, encoded at
+the new twelve-detent centres. Saved raw Rate values are not migrated and
+may select another duration; see `docs/sync-table.md` for knob positions.
+
+Artifact: `build/mono_V2.2.0r-p74-dotted-lfo.syx`. Raw image: **524,064
+bytes**, **224 bytes free** below the 524,288-byte bootloader limit, 32 bytes
+larger than p73. Build ID: `378EDD75`. Built with the usual `-O3` DSP option.
+At the user's request, no test suites or emulator runs were performed;
+only the build script's existing instruction, size and packing integrity
+checks ran. Hardware validation is pending. The dotted-quarter follow-up
+and prior p72/p73 changes remain local; the GitHub merge contains PR #1.
+
+## LV3: all 54 generated instrument levels (p73 — 2026-11-23)
+
+**Artifact:** `build/mono_V2.2.0r-p73-all54-balanced.syx`. This replaces
+LV2's six-feature gain predictor and all 54 catalogue intercepts. It runs
+in both `instrument()` and the separate drum-kit generator, so normal
+patch generation, mod notes, bass kits and drum kits use it. It only
+changes newly generated OutVol base / X-Mod depth / X-Env depth. Saved
+parameter records keep their values; regeneration is required to hear LV3.
+The p72 hat/sub filter bounds and flash packing are retained.
+
+**Prediction and ceiling.** Fit on 1,296 actual ARM-generated sounds
+(24 per type), using unnormalised model output. Shared features are decay,
+maximum/minimum VCO level, band-pass colour, cutoff, high-pass cutoff,
+release, cubic filter-envelope amount, low pitch and attack. Each type has
+its own intercept (0.125 dB resolution). A Huber fit with a 3 dB threshold
+prevents near-silent outliers from making the whole type too loud; shared
+slopes use ridge 0.3. Four folds split by draw index select ten features.
+Coefficients and provenance are in `docs/loudness-model.json`; the fit
+script is `tools/bench/fit_levels.py`.
+
+The target is **-36 dB on the model's mean maximum K-weighted 100/400 ms
+window metric**, not -36 LUFS or a calibrated hardware level. This was
+chosen on the training folds, before final validation: a -30 dB target
+left 80/1,296 draws at the unity-volume ceiling and a 6.78 dB span between
+recipe medians, chiefly Drop. At -36 dB these were 19/1,296 and 2.39 dB.
+The typical generator level is consequently about 7 dB lower. This is
+intentional headroom to balance quiet types, not additional digital gain.
+A nearly closed filter or a vanishing transient can still produce a quiet
+individual draw; neither fitting nor a unity-limited VCA guarantees equal
+perceived loudness for every random sound, note and gate length.
+
+Depths follow the cube root of the volume gain. Unlike LV2, a requested
+boost is reduced if it would saturate either raw depth; this preserves
+the intended modulation depth ratio. A composite parameter can still clip
+in the stock evaluator. Gain attenuation is bounded at 48 dB and the cube
+root uses seven iterations. No heap, persistent RAM, format change, or
+per-sample/IRQ work is added.
+
+**Measurement corrections.** In addition to p72's ADSR-once correction,
+the renderer now applies the **actual emitted DAC-word conversion** before
+interpolating CVs. At `0x081135B2..0x0811378A`, stock code converts to
+saturating unsigned 32-bit integers, then stores/merges the low 16 bits.
+The waveform mapper can produce finite intermediate CVs much greater than
+one around zero crossings (captured example: CV5 = 6.5848794e14), and tiny
+negative CVs. Feeding those directly to an exponential gain in the old
+renderer yielded non-finite audio, while the real emitted DAC word stays
+finite. The new renderer reproduces the stock conversion, including its
+negative-CV wrap; it does not claim to repair that mapper. Thirteen mapped
+channels, six values (including those extremes), and eight samples each
+were verified against packets emitted by the real stock ARM instructions.
+
+`fast_levels.py` boots the full image, generates through the live event
+path and checks the emitted records. Each draw restores RAM, peripheral
+backing and host clock/RNG state; it waits for exactly one actual note-on
+and note-off. The audio IRQ then runs on an ARM MAX clone with native
+FP64. Seven representative recipes, 64 samples each, match the full M7
+IRQ's CVs and unclipped cutoff sum. This acceleration deliberately excludes
+foreground reseeding / sequencer advancement between gate events. It is
+not MCU cycle timing. The analog voice remains an uncalibrated stand-in.
+
+Two discarded pilot surveys are not training data: one captured delayed
+note starts, another stopped at the old renderer's non-finite audio.
+The final training survey is `build/bench/p73-train-v3/survey.json`, fully
+rerendered through the DAC-word-aware renderer. Training seed is 73221126;
+the independent 432-draw validation uses seed 988221126, eight per type.
+
+**Final independent validation (actual rebuilt -36 dB image).** Both
+surveys use the same patch seeds and the same DAC-aware renderer. All 432
+pre-level parameter arrays match exactly, and no emitted parameter outside
+OutVol base / X-Mod depth / X-Env depth changes. Foreground RNG reseeding
+can change S&H trajectories between the two images, so these are aggregate
+model measurements, not an exactly paired analog signal experiment.
+
+| Measure | p72 | p73 |
+|---|---:|---:|
+| Overall level standard deviation | 6.06 dB | 5.11 dB |
+| 10th–90th percentile span | 12.53 dB | 10.61 dB |
+| Standard deviation of 54 recipe medians | 2.50 dB | 2.09 dB |
+| Full span of those medians | 13.07 dB | 12.68 dB |
+| Draws >6 dB above their survey median | 34/432 | 27/432 |
+| Draws >10 dB below their survey median | 29/432 | 14/432 |
+| Survey median | -29.18 dB | -36.06 dB |
+
+This is an improvement across the full catalogue, **not proof that every
+type or every draw now has equal loudness**. Held-out Pad draws remain
+particularly quiet (median -44.85 dB) and some types' within-recipe spread
+increases. The training-fold 2.39 dB median span above must not be reported
+as a held-out result. Unity-limited volume cannot recover missing signal;
+the general analog model also cannot establish hardware calibration. Only
+four held-out base volumes increase in absolute terms; 422 decrease and
+six stay unchanged. The common level is 6.87 dB quieter: improvements in
+quiet-outlier counts are relative to that common level. Full per-recipe
+data, survey/image/renderer hashes are in `docs/loudness-validation.json`.
+
+Two additional Clap draws ran through the full M7 foreground, key scanner
+and IRQ path (`build/bench/p73-system-{before,after}/survey.json`), with
+exactly one observed note start per capture: -25.88/-32.28 dB before,
+-36.18/-39.19 dB after. This is a small integration confirmation, not an
+additional all-54 loudness survey. No hardware audio or DWT cycles were
+measured in this change.
+
+**Space and checks.** Image size is 524,032 bytes, **256 bytes below** the
+524,288-byte cap. The exact named SYX passed the real secondary-bootloader
+emulator: 16,376 flash words written, exact final image, jump to app.
+Static branch/relocation/span/SYX checks pass. 13,500 paired ARM draws over
+five note/scale/tempo/kit contexts preserve RNG consumption and every
+parameter except the three gain fields and the previously documented p72
+cutoff bounds; every type exercises the new gain code. Gain predictions,
+depth ratios, valid returns and stack balance are checked independently.
+Live UI tests cover mod notes, normal patches and eight-note drum kits,
+and confirm playback does not re-level saved sounds. For identical input
+parameters, 100 x 100 complete DSP frames and all 21 RC states remain
+bit-identical to p72.
+
+SYX: 377,979 bytes, MD5 `e0e3ce3998638db6795f9c27bde8d881`, SHA-256
+`a0c4b94fa31aae012e62eccc27f985bedbcd98c153bbdb686dfa02bef15bb26a`.
+Raw SHA-256: `ce2ba6a4c603a7e9661ab94f57e6368176cddab43ab82794b42878f840ed22d4`.
+The image, ELF, hole manifests, source snapshot and build provenance are
+preserved in `build/loudness-p73-all54/`. Hardware-tested p71 rollback:
+`build/mono_V2.2.0r-p71-before-balance.syx`.
+
+Reproduce the fit and independent survey with:
+
+```bash
+build/venv/bin/python tools/bench/fast_levels.py --draws 24 --seed 73221126 --workers 6 --out build/bench/train-new
+build/venv/bin/python tools/bench/fit_levels.py build/bench/train-new/survey.json --max-features 10 --target -36 --out build/bench/model-new.json
+build/venv/bin/python tests/test_generator_balance.py --live
+build/venv/bin/python tests/test_bench_levels.py --firmware --fast-firmware
+build/venv/bin/python tools/bench/compare_levels.py build/bench/p73-holdout-before/survey.json build/bench/p73-all54-holdout-after/survey.json --out build/bench/p73-all54-comparison.json
+```
+
+## BAL: bounded generated hats and sub bass (p72, experimental — 2026-11-22)
+
+**Artifact:** `build/mono_V2.2.0r-p72-balanced.syx`. This is a first
+listening trial of recipe conditioning, not a new fit of all 54 LV2 gains.
+Generate new closed/open hats or `sub` sounds to hear it. Previously saved
+parameter records are not rewritten or reinterpreted. All other 51 recipes,
+including `wind`, retain their previous generated parameter values. The global
+volume predictor and the per-instrument gain bytes are unchanged.
+
+**Space.** p71 occupied 524,256 of the bootloader's 524,288-byte cap, leaving
+32 bytes. Recipe choices (signed intervals, octave offsets, waveform/type
+IDs and divisions) now use 8-bit tables; the raw waveform choice tables use
+16 bits. Two unused trailing values in `metal`'s KBASES table were removed.
+This is only internal constant storage, not the saved-patch format. A
+packing-only intermediate is 523,200 bytes (1,088 spare). The final p72
+image is **523,392 bytes, 896 spare**: the filter conditioning adds 192 net
+bytes after linking/packing. The unchanged 512 KiB limit is enforced by
+the builder and independently checked through the real bootloader code.
+
+**`audible_filter(Patch&, what)`**, after tempo fitting and before leveling,
+is installed in both `instrument` and the separate drum-kit path:
+
+- Closed/open hats (IDs 3/4): cap the base cutoff at coordinate 129,
+  approximately 7.04 kHz, for the note the instrument is generated for.
+  The raw cap is `(186 - played_note) * 256`, accounting for the generator's
+  FOLLOW coordinate and custom mod-note/bass-kit notes. This includes the
+  kit/style brightness adjustment. Cutoff modulation itself is retained;
+  this is a cap on the base, not on every future sample or transposition.
+- Sub (ID 52): raise only the base cutoff when its direct modulation could
+  bring it less than two octaves above VCO1's base pitch. In raw cutoff coordinates the
+  floor is VCO1 tune + 36 semitones: 12 for the cutoff/pitch offset, 24 for
+  headroom. The allowance includes either sign of X-Mod, downward X-Env
+  (either sign when routed into X-Mod), and a negative main ENV AMOUNT.
+  Waveforms, note pitches, modulation depths/rates and envelope times stay
+  as drawn. Secondary modulation of ENV AMOUNT and future note changes are
+  outside this bound. It raises the quieter part of a filter sweep; it is
+  not a compressor or a hard audio-rate floor.
+
+No allocations or new persistent state; all work is in generation in the
+main loop. The audio IRQ runs the same DSP. Nothing changes bootloader code,
+cache/DMA policy, project format, or parameter ranges.
+
+**A/B methodology matters.** Full separate emulator runs with the same
+generator seed still give different hardware-RNG reseeding/S&H trajectories
+and sometimes different ADSR modulation. Those runs showed apparent level
+changes even for unchanged raw patches. They are kept under
+`build/bench/p72-ab/` as installation checks, not used to claim isolated
+loudness improvements.
+
+For the comparison below, `Bench` additionally captures cutoff's linear
+sum in s16 at `0x081131A2`, *before* its 0..149 clamp. It verifies that the
+clamped sum matches the published CV for every sample. `filter_ab.py`
+checks both builds' actual parameter records differ only in cutoff base,
+then shifts the captured sum by `(new_raw-old_raw)/256` and renders both
+versions with **identical** oscillator/noise/ADSR/other CV streams. Starting
+from already-clipped CV would be wrong when reducing an over-range cutoff;
+the pre-clip capture and regression cover that. Three matching live CV
+cases independently check this replay against the actual new firmware,
+maximum discrepancy 0.000382 semitone (<0.04 cent; FP interpolation).
+This replay isolates the filter change, not a complete second execution.
+
+**Model results, six draws each**, 300 ms held + 500 ms released, same seed
+formula as the audit below. Unit: the uncalibrated model's K-weighted
+100/400 ms comparison metric, not hardware LUFS:
+
+| Recipe | Quietest before → after | Level span before → after |
+|---|---:|---:|
+| closed hat | -43.53 → -39.11 dB | 22.58 → 18.40 dB |
+| open hat | -39.55 → -35.76 dB | 14.83 → 11.05 dB |
+| sub | -40.32 → -32.65 dB | 17.78 → 10.22 dB |
+
+Across these 18 draws, standard deviation 6.24 → 4.55 dB, P10–P90 span
+15.72 → 9.56 dB. This is mostly removal of the previously observed quiet
+outliers. On the 12 additional draws not used to identify those outliers,
+standard deviation is essentially unchanged (3.26 → 3.27 dB); **this is
+not evidence of broadly solved loudness normalization**. The loudest
+window level rises only 0.23 dB in this sample, but the largest short peak
+increases from 0.349 to 0.560 model units (~4.1 dB), on a closed hat whose
+high frequencies are now less filtered. Analog headroom/timbre still need
+listening on the unit. No new gain coefficients were fitted to these samples.
+
+Exact captures/records: `build/bench/p72-controlled/*-source/`; paired
+renders and measurements: `build/bench/p72-controlled/*-paired/`; combined
+results: `build/bench/p72-controlled/comparison.json`. To reproduce one pair:
+
+```bash
+build/venv/bin/python tools/bench/levels.py sub --draws 6 --tail 500 --image build/loudness-p71-baseline/firmware-patched.bin --elf build/loudness-p71-baseline/np_patch.elf --out build/bench/sub-before-check
+build/venv/bin/python tools/bench/levels.py sub --draws 6 --tail 500 --out build/bench/sub-after-check
+build/venv/bin/python tools/bench/filter_ab.py build/bench/sub-before-check build/bench/sub-after-check build/bench/sub-paired-check
+```
+
+**Validation:**
+
+- Packing only: 13,500 paired actual ARM generations (54 recipes × 50
+  seeds × five note/scale/tempo/kit contexts), all 171 parameters and final
+  RNG state bit-identical to p71.
+- With conditioning: the same 13,500 pairs differ only in the base cutoff
+  of IDs 3/4/52; checks include the hat ceiling and sub direct-modulation
+  trough. RNG consumption is identical. Changed draws: 129/112/149.
+- Live mod-note generation, normal-patch chord and the separate eight-note
+  drum kit all invoke the installed guard. Playback does not invoke it.
+- DSP regression: 100 × 100 frames with decoded mod-note parameters,
+  endpoint/morph cases and all RC envelope states bit-identical to p71
+  when given the same parameters.
+- Five renderer/meter/replay tests, actual firmware VCA/ADSR check, static
+  image/branch/SysEx round-trip check, and bootloader decompress/flash/jump.
+  The latter writes 16,356 flash words and reproduces the image exactly.
+
+Commands: `tests/test_generator_balance.py --packing-only --after
+build/loudness-p72-packed` for the storage refactor, then
+`tests/test_generator_balance.py --live` for the final build (both through
+`build/venv/bin/python`). The preserved p71 baseline is required for these
+comparisons. The build here used `build/venv/bin/python tools/patch.py build`
+because the system Python lacked capstone.
+
+Final SYX MD5 `d81e3f126f1682c395e6d21db7f1bdcb`; SHA-256
+`e81119b44408911cd2f65d682029e7a7750a68f96621a9e37bf7ddb591864ee2`.
+Raw SHA-256 `924f4c29da175121a965167949163a9e4d84fcd075b9df672c83b15fcdacf745`.
+Source snapshots, ELF, manifests and compiler identity are preserved in
+`build/loudness-p72-candidate/`. The rollback file is
+`build/mono_V2.2.0r-p71-before-balance.syx` (the hardware-tested p71 image).
+
+---
+
+## Loudness bench audit (2026-11-22; firmware unchanged)
+
+Inspected p71, commit `1dfbf93`. Verified image: 524,256 bytes,
+SHA-256 `cd9bebee507dfa281ebc5f96d51c7c9ab102bd0dae15fdd0409b14cf5a7515fb`.
+The hardware-tested SYX remains byte-identical, SHA-256
+`5ac5552e6b5be606e984d458a56f54bed5d611895dec430dac0620449f5af85c`.
+There is no new flash image from this audit. A preserved copy, including ELF
+and hole manifests, is in `build/loudness-p71-baseline/`.
+
+**Confirmed bug: the listening model applied the main ADSR twice.** The
+stock DSP evaluates OutVol at `0x081131C8`, loads the main ADSR from
+`engine+0x2F2C` at `0x081131D4`, multiplies them at `0x081131DC`, then
+multiplies another gain at `0x081131E4` and converts that product through
+the CV lookup. The result is published at `0x08113218` to
+`engine+0x2EE8`, capture index 13. That CV already represents the final
+VCA gain. `render.c` multiplied `expo(CV13)` by `CV30` (the diagnostic ADSR
+value) again. It now uses `expo(CV13)` alone.
+
+This is checked through real mod-note parameter events, note-on and the
+audio IRQ, not just by reproducing the renderer formula in a test: unity
+OutVol, instant attack/decay, sustain 1/4 gives ADSR `0.250000` and decoded
+VCA gain `0.250193`. The old model turns that into approximately `0.0625`,
+an extra 12 dB attenuation. Thus the old LV2 fit and its reported improvement
+are not validated for the corrected model, much less for the hardware.
+
+**Measurement fixes.** The normal WAV remains a peak-normalised listening
+preview. The renderer can additionally write unnormalised float32 audio;
+`levels.py` uses that output, never the preview's peak or RMS. `Bench`
+rebuilds a missing/stale renderer automatically (the installed executable
+before this audit dated from October 8). Tests check that a real gain
+halving reads -6.0206 dB even though the two normalised previews look equal,
+and changing diagnostic CV30 alone has no effect on rendered sound.
+
+`tools/bench/levels.py` uses a fresh boot, forces a known generator seed and
+instrument through the live event handler, and records the actual emitted
+parameters, the parameters before leveling, firmware/ELF hashes, CV traces,
+and raw audio. It verifies the seed hook, the instrument identity, and that
+the captured pre-level parameters match the live records outside the three
+OutVol values the leveler changes. This avoids a direct-entry test passing
+while the generator's installed path never runs.
+
+The comparison metric is the mean of the maximum K-weighted 100 ms and
+400 ms window levels. The filter derives from
+[ITU-R BS.1770, Annex 1](https://www.itu.int/rec/R-REC-BS.1770), with the
+48 kHz coefficients retimed for 32 kHz through the bilinear prototype;
+the frequency-response check differs by less than 0.05 dB over 20 Hz–14 kHz.
+This one-shot metric is **not integrated LUFS**, a true-peak measurement,
+or a calibrated measurement of the analog voice.
+
+**Small independent survey, not a replacement training set.** 23 captures
+across 12 recipes, 300 ms held + 500 ms released, reference seed 2201126,
+two draws each except drone (one completed capture in this set). The image
+and all output-volume coefficients were unchanged. Values below are dB in
+the comparison metric, relative to the model's arbitrary full-scale unit.
+
+| Recipe | Draw 1 | Draw 2 |
+|---|---:|---:|
+| kick | -28.60 | -29.12 |
+| clap | -28.05 | -29.25 |
+| hat-closed | -36.96 | -43.53 |
+| sub | -25.55 | -40.32 |
+| pad | -28.32 | -27.31 |
+| organ | -32.73 | -31.67 |
+| bass | -28.34 | -23.74 |
+| drone | -28.44 | — |
+| gong | -30.08 | -31.71 |
+| bell | -30.37 | -27.84 |
+| wind | -25.69 | -38.22 |
+| vargan | -24.02 | -31.73 |
+
+Range 19.79 dB; P10–P90 span 12.39 dB. Replaying these same CV traces
+through the historical renderer (only its printed peak precision increased)
+shows the extra envelope understated the metric by 0.24–4.20 dB,
+median 2.23 dB. Raw traces and records: `build/bench/audit-p71-{0,1,2}/`;
+combined historical/current comparison: `build/bench/audit-comparison.json`.
+A separate additional drone draw measured -30.52 dB; it is not included in
+those 23-capture statistics. This sample is too small to refit 54 independent
+instrument offsets responsibly.
+
+**Why turning up quiet classes does not solve it.** Both wind draws have
+OutVol 65535, yet differ by 12.53 dB in the model. The quiet closed hat also
+has OutVol 65535. Its cutoff CV is 147.65 (about 20.7 kHz), with colour
+0.892, mostly high-pass: the recipe can cut away most audible energy before
+the VCA. `Gen::range` expands the already high cutoff range. Conversely,
+the quiet sub is attenuated to OutVol 19069 and its slow cutoff LFO holds
+cutoff CV around 40–47 during this note; the louder sub has cutoff around
+70–78. LV2 uses neither cutoff nor its modulation, resonance, waveform,
+played pitch, or LFO phase. These differences cannot be inferred from its
+six raw-knob features and one instrument offset. The `mute()` check also
+exempts high-pass patches and audio S&H noise sources outright, and otherwise
+checks the most open cutoff rather than whether the note is usually audible.
+
+**Another limitation, not a crash:** scaling the two cubic OutVol depths
+preserves their ratios only while they remain representable and the slot
+does not clip. In 2,700 deterministic calls to the actual ARM generator
+(50 seeds × 54 instruments), gain ratios ranged from 0.0692 to 1.9397;
+252 draws reached maximum OutVol. In 21 draws, depth saturation made a
+scaled modulation term differ by more than 0.01 from the requested linear
+scaling. The largest error was a clap whose requested envelope depth would
+be 1.6415; it clamps to approximately 1.0. A claimed constant gain change
+can therefore also change the bursts/gating contour. No memory fault or
+out-of-range parameter was observed in that numeric survey. This is not
+an overall firmware safety certification.
+
+Numeric-survey input: `what=0..53`, `draw=0..49`, Gen seed
+`((draw+1)*0x9E3779B9 + what*19031) & 0xFFFFFFFF`, chromatic C4,
+no kit, transport rate 2048. Called the ELF's `instrument(Patch&, Gen&,
+Context&, unsigned)` in ARM emulation and captured at `leveled` and return;
+data is saved in `build/bench/level-gain-audit.npy`. The worst case is
+instrument 2 (clap), draw 41, original OutVol 39922, leveled OutVol 65535.
+
+**Recommended implementation order.** First bound the recipe combinations
+that suppress almost all useful energy (especially very high high-pass
+cutoffs and deep cutoff modulation on a sub), with listening A/B checks so
+intentional modulation is retained. Then refit bounded gain correction on
+the corrected model, with held-out seeds and different notes, gate lengths,
+tempos and kit styles; include actual filter/modulation features rather than
+just adding more per-instrument offsets. Do not boost a near-silent recipe
+without accounting for the louder phase of its modulation. Finally calibrate
+against recordings of the analog output. A gain table alone cannot measure
+that output, and a compressor cannot simply be inserted in this CV renderer
+as if the MCU processed the analog audio samples.
+
+Reproduce the survey (use a new output directory for each run):
+
+```bash
+build/venv/bin/python tests/test_bench_levels.py --firmware
+build/venv/bin/python tools/bench/levels.py kick clap hat-closed sub --draws 2 --tail 500 --out build/bench/recheck-0
+build/venv/bin/python tools/bench/levels.py pad organ bass drone --draws 2 --tail 500 --out build/bench/recheck-1
+build/venv/bin/python tools/bench/levels.py gong bell wind vargan --draws 2 --tail 500 --out build/bench/recheck-2
+```
+
+Validation: four renderer/meter regressions, the actual firmware VCA check,
+and a fresh-boot survey through the installed generator. Neither DWT cycles
+nor analog loudness were measured on hardware. No firmware behavior, ISR,
+heap usage, or flash layout changed; only host tools/tests and documentation.
+
+---
+
 ## DB, p70: deeper basses, a sub bass and a deep bass (2026-11-20)
 
 **Request:** the basses were all not deep enough; half of them should sit

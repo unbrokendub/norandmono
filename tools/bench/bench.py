@@ -20,6 +20,7 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,7 @@ sys.path.insert(0, str(ROOT / 'tests'))
 os.chdir(ROOT)
 import sysemu                                   # noqa: E402
 from unicorn import UC_HOOK_CODE                # noqa: E402
+from unicorn.arm_const import UC_ARM_REG_S16    # noqa: E402
 import test_modnote_random as T                 # noqa: E402
 
 E = 0x20004834
@@ -37,19 +39,39 @@ RENDER = ROOT / 'build/bench/render'
 OUT = ROOT / 'build/bench/wav'
 
 
+def ensure_renderer():
+    source = ROOT / 'tools/bench/render.c'
+    if not RENDER.exists() or source.stat().st_mtime_ns > RENDER.stat().st_mtime_ns:
+        RENDER.parent.mkdir(parents=True, exist_ok=True)
+        # Parallel surveys must never execute an unfinished linker output.
+        with tempfile.TemporaryDirectory(dir=RENDER.parent) as tmp:
+            target = Path(tmp) / 'render'
+            subprocess.run(['cc', '-O3', '-Wall', '-Wextra', str(source), '-lm', '-o', str(target)], check=True)
+            os.replace(target, RENDER)
+
+
 class Bench:
     def __init__(self):
+        ensure_renderer()
         self.r = r = T.Rig()
         self.uc = uc = r.uc
         self.frames = []
+        self.cutoff_before_clip = []
         self.owner18 = r.u32(E + 0x2E68 + 4 * 18)
         uc.hook_add(UC_HOOK_CODE, lambda u, a, s, d: self.frames.append(bytes(u.mem_read(E + 0x2EB4, NCV * 4))),
                     begin=0x08115040, end=0x08115040)
+        # The linear cutoff sum before its 0..149 clamp. Needed for paired
+        # filter-only replay: a clipped CV alone cannot tell how far past
+        # the limit the original sum was.
+        uc.hook_add(UC_HOOK_CODE, lambda u, a, s, d: self.cutoff_before_clip.append(
+            struct.unpack('<f', struct.pack('<I', u.reg_read(UC_ARM_REG_S16)))[0]),
+                    begin=0x081131A2, end=0x081131A2)
         uc.ctl_flush_tb()
 
     def play(self, key, hold_ms, tail_ms):
         r, m = self.r, self.r.m
         self.frames.clear()
+        self.cutoff_before_clip.clear()
         r.trace.clear()
         r.starts.clear()
         m.press(key)
@@ -60,14 +82,22 @@ class Bench:
         start = r.starts[0] if r.starts else 0
         # r.trace and self.frames are appended by the same per-sample hook
         frames = self.frames[start:]
-        return np.frombuffer(b''.join(frames), dtype='<f4').reshape(-1, NCV), sync >= 0.5
+        assert len(self.cutoff_before_clip) == len(self.frames), 'cutoff hook/sample alignment'
+        self.cutoff_unclipped = np.asarray(self.cutoff_before_clip[start:], dtype='<f4')
+        cv = np.frombuffer(b''.join(frames), dtype='<f4').reshape(-1, NCV)
+        np.testing.assert_allclose(cv[:, 12], np.clip(self.cutoff_unclipped, 0, 149), atol=2e-5, rtol=0)
+        return cv, sync >= 0.5
 
-    def render(self, cv, sync, name):
-        OUT.mkdir(parents=True, exist_ok=True)
-        f32 = OUT / (name + '.f32')
-        wav = OUT / (name + '.wav')
+    def render(self, cv, sync, name, raw_path=None, directory=None):
+        out_dir = OUT if directory is None else Path(directory)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        f32 = out_dir / (name + '.f32')
+        wav = out_dir / (name + '.wav')
         cv.astype('<f4').tofile(f32)
-        out = subprocess.run([str(RENDER), str(f32), str(wav), '1' if sync else '0'],
+        command = [str(RENDER), str(f32), str(wav), '1' if sync else '0']
+        if raw_path is not None:
+            command.append(str(raw_path))
+        out = subprocess.run(command,
                              check=True, capture_output=True, text=True).stdout
         f32.unlink()
         self.peak = float(out.split('peak')[1]) if 'peak' in out else 0.0
