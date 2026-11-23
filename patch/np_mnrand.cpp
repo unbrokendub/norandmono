@@ -187,11 +187,24 @@ constexpr unsigned audio_st(int st)
  * 0..63, is (d + 1) / 4 of the played note: d 3 = 1.0, d 15 = 4.0, d 55 =
  * 14.0; bank B, 64..127, the irrational Yamaha set (docs/ratio-table.md). */
 constexpr unsigned ratio_detent(unsigned d) { return d * 512u + 256u; }
-/* Synced (type 1): ten divisions, one per 10 % of the knob (np_lfo.cpp
- * kDivSelect); they run from the tempo whether or not the sequencer plays,
- * and restart at the pattern's start. */
+/* Synced (type 1): eleven divisions, one per 1/11 of the knob (np_lfo.cpp
+ * kDivTicks); they run from the tempo whether or not the sequencer plays,
+ * and restart at the pattern's start.  The generator uses ten of them, not
+ * 1/8 dotted, and writes the centres of the earlier ten 10 % detents.  Each
+ * of those centres still lands inside its own division on the eleven-detent
+ * knob (raw / 65536 * 11), which the assert below checks, so the recipes
+ * draw exactly the divisions they did. */
 enum Division : unsigned { D_1D, D_1, D_2D, D_2, D_4, D_4T, D_8, D_8T, D_16, D_32 };
 constexpr unsigned division(unsigned d) { return d * 6554u + 3277u; }
+constexpr unsigned kDivKnob[] = {0u, 1u, 2u, 3u, 4u, 6u, 7u, 8u, 9u, 10u};
+constexpr bool divisions_land()
+{
+    for (unsigned d = D_1D; d <= D_32; ++d)
+        if (division(d) * 11u / 65536u != kDivKnob[d])
+            return false;
+    return true;
+}
+static_assert(divisions_land(), "a generator division moved on the knob");
 
 /* VCO WAVE fades sine -> triangle -> square -> saw over the knob. */
 constexpr unsigned kSine = 0x0000, kTri = 0x5555, kSquare = 0xAAAA, kSaw = 0xFFFF;

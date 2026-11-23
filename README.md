@@ -59,8 +59,9 @@ flashing the official update the same way.
 - **Synced LFOs.**
   - They follow tempo changes continuously.
   - A synced S&H steps on every division.
-  - All 15 divisions, including quintuplets and 1/64, retrigger exactly
-    under external MIDI clock.
+  - Eleven divisions, from 1/1. to 1/32 and including a dotted eighth that
+    the stock table lacks, all retrigger exactly under external MIDI clock.
+    See [docs/sync-table.md](docs/sync-table.md).
 
 ### The mod-note instrument generator
 

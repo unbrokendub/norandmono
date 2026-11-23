@@ -918,8 +918,8 @@ def test_xmod_type(m):
     rig = XModRig(m, rate=0.75, slot_id=8, pitch=0.0)
     close("type 0 = slow LFO table at 0.75", rig.rate_for(0),
           table_at(m, SLOW_TABLE, 0.75), 1e-6)
-    # knob 0.75 -> index int(0.75*10) = 7 -> stock table entry kDivSelect[7]
-    # = 9.  This is the check that keeps the parameter handler and the clock
+    # knob 0.75 -> index int(0.75*11) = 8 -> kDivTicks[8] = 1024/3, which is
+    # stock table entry 9.  This is the check that keeps the parameter handler and the clock
     # tick agreeing about what a knob position selects.
     close("type 1 = 192 Hz / division[9] (1/8T)", rig.rate_for(1),
           192.0 / rig.division(9), 1e-6)
@@ -1960,12 +1960,12 @@ def test_lfo_tick(m):
     check("non-boundary flag 0x074", m.u32(rig.owner(0) + 0x074) & 0xFF, 0)
 
     print("np_mod_tick -- integer boundary tolerates F8 floating-point roundoff")
-    rig = LfoRig(m, synced=(0,), value=4.5 / 10.0, tick_rate=192.0)
+    rig = LfoRig(m, synced=(0,), value=4.5 / 11.0, tick_rate=192.0)
     m.call(m.mod_tick, r0=rig.slot(0), r1=1023)
     check("1023 represents the 1024-tick boundary", rig.phases(0), [-0.5] * 6)
 
     print("np_mod_tick -- triplet boundaries do not drift after the first hit")
-    rig = LfoRig(m, synced=(0,), value=5.5 / 10.0, tick_rate=192.0)
+    rig = LfoRig(m, synced=(0,), value=6.5 / 11.0, tick_rate=192.0)
     for pos in (682, 1365, 2048, 2730):
         # Give every call a fresh sentinel; all are exact multiples of 2048/3
         # before the MIDI handler truncates its double transport position.
@@ -1985,7 +1985,7 @@ def test_lfo_tick(m):
     from fractions import Fraction as _F
     ADV0 = _F(128, 3)
     dropped_periods = {192, 36, 24 * 5, 2, 3}   # 2/1, 1/4., 1/16Q, 1/32T, 1/64
-    kept_periods = {144, 96, 72, 48, 24, 16, 12, 8, 6, 3}
+    kept_periods = {144, 96, 72, 48, 24, 18, 16, 12, 8, 6, 3}
 
     def period_at(value):
         rig = LfoRig(m, synced=(0,), value=value, tick_rate=192.0)
@@ -1999,8 +1999,8 @@ def test_lfo_tick(m):
         return None
 
     seen_periods = {period_at(step / 39.0) for step in range(40)}
-    check("the knob reaches exactly ten divisions", len(seen_periods), 10)
-    check("and they are the ten that were kept", seen_periods, kept_periods)
+    check("the knob reaches exactly eleven divisions", len(seen_periods), 11)
+    check("and they are the ten kept plus 1/8 dotted", seen_periods, kept_periods)
     check("2/1 (192 pulses) is gone", 192 in seen_periods, False)
     check("1/4 dotted (36) is gone", 36 in seen_periods, False)
     check("1/32 triplet (2) is gone", 2 in seen_periods, False)
@@ -2009,20 +2009,20 @@ def test_lfo_tick(m):
     # The F8 handler keeps a double at transport+0x18, passes its floor as
     # `pos`, then adds 128/3 (the literal at 0x08118D68).  So one quarter is
     # 1024 engine ticks and a division's period in MIDI pulses is
-    # division / (128/3).  All ten selected divisions come out whole, which
+    # division / (128/3).  All eleven selected divisions come out whole, which
     # is why the fractional realignment case no longer exists.
     from fractions import Fraction
 
     ADV = Fraction(128, 3)
-    periods = (144, 96, 72, 48, 24, 16, 12, 8, 6, 3)
-    names = ("1/1.", "1/1", "1/2.", "1/2", "1/4", "1/4T", "1/8", "1/8T",
-             "1/16", "1/32")
+    periods = (144, 96, 72, 48, 24, 18, 16, 12, 8, 6, 3)
+    names = ("1/1.", "1/1", "1/2.", "1/2", "1/4", "1/8.", "1/4T", "1/8",
+             "1/8T", "1/16", "1/32")
     SENTINEL = 0.25
 
     for idx, period in enumerate(periods):
         pulses = min(2 * period + 1, 400)
         want = [k for k in range(pulses) if k % period == 0]
-        rig = LfoRig(m, synced=(0,), value=(idx + 0.5) / 10.0,
+        rig = LfoRig(m, synced=(0,), value=(idx + 0.5) / 11.0,
                      tick_rate=192.0)
         got = []
         for k in range(pulses):
@@ -2042,7 +2042,7 @@ def test_lfo_tick(m):
     # the phase to -0.5 on the boundary takes that wrap away: when the rate
     # is one cycle per division, reset and wrap fall together, the reset
     # wins, and the held value never changes again.
-    rig = LfoRig(m, synced=(0,), value=(8 + 0.5) / 10.0, tick_rate=192.0)
+    rig = LfoRig(m, synced=(0,), value=(9 + 0.5) / 11.0, tick_rate=192.0)
     # after the rig: building one resets the machine and reloads the image,
     # which would put the stock generator back
     m.uc.mem_write(ORIG_RNG, assemble_thumb(RNG_STUB % (RNG_CELL, RNG_CELL)))
@@ -2066,7 +2066,7 @@ def test_lfo_tick(m):
           as_float(m.u32(owner + 0x28 + 0xE0)), before)
 
     # any other waveform must not be touched
-    rig = LfoRig(m, synced=(0,), value=(8 + 0.5) / 10.0, tick_rate=192.0)
+    rig = LfoRig(m, synced=(0,), value=(9 + 0.5) / 11.0, tick_rate=192.0)
     owner = rig.owner(0)
     m.uc.mem_write(owner + 0x28 + 0xE5, bytes([2]))      # square
     m.w32(owner + 0x28 + 0xE0, 0x3F000000)
@@ -2079,7 +2079,7 @@ def test_lfo_tick(m):
     # MIDI clock is 24 PPQN.  Moving this generic CParam interpolation to an
     # LFO boundary makes its response division-dependent; at 2/1 even one
     # queued step can wait eight quarter notes.
-    rig = LfoRig(m, synced=(0,), value=(8 + 0.5) / 10.0, tick_rate=192.0)
+    rig = LfoRig(m, synced=(0,), value=(9 + 0.5) / 11.0, tick_rate=192.0)
     m.w32(rig.owner(0) + 0x190,
           struct.unpack("<I", struct.pack("<f", 0.001))[0])
     m.w32(rig.owner(0) + 0x194, 8)
