@@ -286,6 +286,20 @@ knob, 2:1 at ~6 % and 4:1 at ~12 %.
 
 - `arm-none-eabi-gcc` / `binutils`. 8.5 is known to work, and the image is
   built with `-Os`/`-O3`, so other versions may change its size.
+
+  A user's report from macOS on Apple Silicon (p75, November 2026):
+
+  - Homebrew's GCC 16.2 with binutils 2.47 does not link. `ld` rejects
+    every `b.w` to a stock address with "Unknown destination type
+    (ARM/Thumb)" and "dangerous relocation: unsupported relocation".
+  - xPack GCC 13.3.1 links, but the image is 524,608 bytes, 320 over the
+    cap.
+  - xPack GCC 8.3.1 alone fails, because its `ld` (binutils 2.32) does not
+    know `--no-warn-rwx-segments` (added in 2.39).
+  - **Working:** xPack GCC 8.3.1 for `gcc`/`g++`, with `arm-none-eabi-ld`
+    and `objcopy` taken from binutils 2.42 (from the xPack 13.3.1
+    package). The image is 524,064 bytes. The static, bootloader and
+    `flash.py --check` checks pass, and the image runs on a unit.
 - Python 3.
 - For the tests: `unicorn` and `capstone`. The bench (`tools/bench`) also
   needs `numpy`. Install them with `pip install -r requirements.txt`.
@@ -358,6 +372,34 @@ PC sampler and heartbeats as MIDI CCs on channel 16. Decode them with
    ```bash
    python3 tools/flash.py --check build/mono_V2.2.0r-patched.syx
    ```
+
+   **A user's report: Apple Silicon failed, an Intel Mac on Monterey worked**
+   (November 2026):
+
+   - **The secondary bootloader may be missing.** On this unit, TEMPO +
+     FUNC at power-on just started the firmware. The secondary bootloader
+     has to be installed first, through the original bootloader: hold
+     PATTERN + RUN at power-on (the SEQ LEDs flash) and send
+     `mono_secondary_bootloader.syx`. After that, TEMPO + FUNC entered the
+     secondary bootloader, which flashes **all** the panel's LEDs.
+   - **macOS 26.3 on an M3 Mac froze the original bootloader on connect.**
+     The LEDs stopped mid-blink the instant USB was plugged in, before any
+     app opened the port, and the same happened when USB was connected
+     before power-on. The system log shows two Apple services opening the
+     device within about 30 ms of the plug-in. MIDIServer claims the
+     MIDIStreaming interface and configures endpoints 0x01 and 0x81, and
+     usbaudiod reports "an Audio Control but no Audio Functions (probably
+     MIDI)". So the original bootloader probably has the same missing Setup
+     handler, and recent macOS triggers it at enumeration, not only
+     mid-transfer. Nothing on the Mac's side avoids it without disabling
+     SIP.
+   - **A 2019 Intel MacBook Pro on macOS 12 Monterey worked.** Both
+     bootloaders kept blinking when connected and with SysEx Librarian
+     open. SysEx Librarian, set to about 10 ms between messages, sent
+     `mono_secondary_bootloader.syx` and then the patched firmware. During
+     the firmware send the SEQ LEDs light one by one, then they go through
+     a second, dimmer pass while the flash is written (don't power off),
+     and then the unit boots the new firmware.
 
 Rules for any host:
 
